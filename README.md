@@ -60,19 +60,6 @@ It includes dummy data generation, PyMC modeling, and optional result visualizat
 
 ![Posterior for parameters](sample3.png)
 
----
-
-### Lambda³ Model Fit (Transaction-based)
-
-**Model fit:**
-
-![L³ Model fit](Lambda_sample_fit.png)
-
-**Posterior distributions (L³ coefficients):**
-
-![Posterior for L³ coefficients](Lambda_sample_posterior.png)
-
----
 
 ## Advanced Usage: Visualization Example
 
