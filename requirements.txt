@@ -1,0 +1,3 @@
+pymc
+numpy
+arviz
