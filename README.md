@@ -157,4 +157,11 @@ Let's redraw the boundaries, together.
 — Iizumi & Digital Partners
 
 ---
+## 📚 Author’s Theory & Publications
+
+**Warning:** Opening this document may cause topological phase transitions in your brain.
+“You are now entering the Λ³ zone. Proceed at your own risk.
+
+Explore foundational theory, preprints, and related research at:  
+👉 [Iizumi Masamichi – Zenodo Research Collection](https://zenodo.org/search?q=metadata.creators.person_or_org.name%3A%22IIZUMI%2C%20MASAMICHI%22&l=list&p=2&s=10&sort=bestmatch)
 
