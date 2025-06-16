@@ -47,54 +47,7 @@ It includes dummy data generation, PyMC modeling, and optional result visualizat
 ---
 
 ## License
-
 MIT License
-
----
-lambda3_jump_event_detector.py
-Overview
-lambda3_jump_event_detector.py is an open-source Python sample for explainable, Bayesian time-series modeling that detects and quantifies “jump events” (discontinuous transitions) using Lambda³ theory (Λ³).
-Unlike traditional time-series models, it separates trend (smooth progression), jump events (discontinuous changes), and transactional progress (structural history), offering a fully transparent, interpretable framework for analyzing dynamic systems—from physics to biology and engineering.
-
-Features
-Bayesian regression with Lambda³-style features:
-
-Directional jump event indicators (ΔΛC_pos, ΔΛC_neg)
-
-Local volatility (ρT, "tension density")
-
-Transactional index (structural progress, not physical time)
-
-Full posterior inference for all coefficients—quantifies which factors matter, and how much
-
-Automatic detection and visualization of jump events in synthetic or real-world time series
-
-Reproducible, fully open-source, and easy to extend for your domain
-
-How it works
-Data generation:
-Synthetic time series with trend, noise, and artificial jump events is created for demonstration.
-
-Lambda³ feature extraction:
-
-Calculates directional jump indicators (ΔΛC_pos, ΔΛC_neg) by comparing each point to its history
-
-Computes local volatility (ρT) over a moving window
-
-Uses a transactional index for progress (can be time, transaction ID, etc.)
-
-Bayesian regression:
-
-Fits a model using these features to explain the observed data
-
-Estimates the effect size and credibility for each explanatory variable
-
-Visualization:
-
-Plots mean model prediction and detected events
-
-Plots posterior distributions for all main coefficients (trend, jump events, volatility)
-
 
 ## Advanced Usage: Visualization Example
 
