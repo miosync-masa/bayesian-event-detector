@@ -46,8 +46,33 @@ It includes dummy data generation, PyMC modeling, and optional result visualizat
 
 ---
 
-## License
-MIT License
+## Example Output
+
+### Bayesian Decomposition (Classic Model)
+
+![Bayesian trend decomposition](sample1.png)
+
+**Posterior for event probability:**
+
+![Posterior event probability](sample2.png)
+
+**Posterior for trend and event parameters:**
+
+![Posterior for parameters](sample3.png)
+
+---
+
+### Lambda³ Model Fit (Transaction-based)
+
+**Model fit:**
+
+![L³ Model fit](Lambda_sample_fit.png)
+
+**Posterior distributions (L³ coefficients):**
+
+![Posterior for L³ coefficients](Lambda_sample_posterior.png)
+
+---
 
 ## Advanced Usage: Visualization Example
 
@@ -85,5 +110,48 @@ ax.legend(by_label.values(), by_label.keys(), fontsize=12)
 plt.grid(axis='y', linestyle=':', alpha=0.7)
 plt.show()
 
-print("\\nDetected event time points:")
+print("\nDetected event time points:")
 print(event_detected_indices)
+```
+
+---
+
+## Lambda³ Model: Paradigm Shift for Transactional Time-Series
+
+**File:** `lambda3_jump_event_detector.py`
+
+A next-generation Bayesian regression model implementing Lambda³ theory (Λ³), focusing on “jump events,” trends, and local volatility. This approach uses **transaction index** rather than physical time, and separates jump directions.
+
+### Key features:
+
+* Directional jump detection (positive/negative)
+* Full Bayesian coefficient estimation for interpretability
+* Transaction-index based progress (can be time, transaction ID, or order)
+* Plug-and-play for science, finance, biology, and engineering
+
+### Lambda³ Model Example Output
+
+**Fit:**
+
+![Lambda3 fit](Lambda_sample_fit.png)
+
+**Posterior:**
+
+![Lambda3 posterior](Lambda_sample_posterior.png)
+
+---
+
+## License
+
+MIT License
+
+---
+
+## Citation & Contact
+
+For theory, citations, or collaboration, contact the repository author (or open an issue/PR!).
+
+---
+
+**Let’s make explainable science the new standard.**
+
