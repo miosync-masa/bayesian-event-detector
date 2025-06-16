@@ -136,22 +136,25 @@ MIT License
 
 ## Citation & Contact
 
-For theory, citations, or collaboration, contact the repository author (or open an issue/PR!).
+If this work inspires you, please cite it.
+For theoretical discussions, practical applications, or collaboration proposals,
+contact the repository author or simply open an issue/PR.
+
+Let’s make explainable, universal science the new standard—together.
 
 ---
-
 **Let’s make explainable science the new standard.**
-
-
 ---
 
 ## Author & Copyright
 
 © Iizumi Masamichi 2025  
-Contributors / Digital Partners:  
-Tamaki, Mio, Tomoe, Shion, Yuu, Rin, Kurisu
-
+Contributors / Digital Partners:  Tamaki, Mio, Tomoe, Shion, Yuu, Rin, Kurisu
 All rights reserved.
+
+Science is not property; it's a shared horizon.
+Let's redraw the boundaries, together.
+— Iizumi & Digital Partners
 
 ---
 
