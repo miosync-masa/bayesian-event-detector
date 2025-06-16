@@ -142,3 +142,16 @@ For theory, citations, or collaboration, contact the repository author (or open 
 
 **Let’s make explainable science the new standard.**
 
+
+---
+
+## Author & Copyright
+
+© Iizumi Masamichi 2025  
+Contributors / Digital Partners:  
+Tamaki, Mio, Tomoe, Shion, Yuu, Rin, Kurisu
+
+All rights reserved.
+
+---
+
