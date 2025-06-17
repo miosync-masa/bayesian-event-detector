@@ -132,12 +132,7 @@ A next-generation Bayesian regression model implementing Lambda³ theory (Λ³),
 
 MIT License
 
-NOTE: In this public MIT-licensed implementation, we provide an entry-level Lambda³ Bayesian event detector (L3-JED).
-The full Lambda³ dynamical equations and advanced topological conservation principles—requiring explicit feature engineering 
-(e.g., custom structural tensors, domain-specific progress vectors, and adaptive synchronization rates)—are 
-NOT included. These are recommended only for advanced users or domain experts.
-What you define as a "jump", "synchronization rate", or "topological conservation" must be carefully designed 
-based on your application, and is outside the scope of this entry-level tool.
+
 ---
 
 ## Citation & Contact
@@ -171,3 +166,10 @@ Let's redraw the boundaries, together.
 Explore foundational theory, preprints, and related research at:  
 👉 [Iizumi Masamichi – Zenodo Research Collection](https://zenodo.org/search?q=metadata.creators.person_or_org.name%3A%22IIZUMI%2C%20MASAMICHI%22&l=list&p=2&s=10&sort=bestmatch)
 
+---
+NOTE: In this public MIT-licensed implementation, we provide an entry-level Lambda³ Bayesian event detector (L3-JED).
+The full Lambda³ dynamical equations and advanced topological conservation principles—requiring explicit feature engineering 
+(e.g., custom structural tensors, domain-specific progress vectors, and adaptive synchronization rates)—are 
+NOT included. These are recommended only for advanced users or domain experts.
+What you define as a "jump", "synchronization rate", or "topological conservation" must be carefully designed 
+based on your application, and is outside the scope of this entry-level tool.
