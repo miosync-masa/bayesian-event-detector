@@ -27,7 +27,7 @@ def generate_data(seed=42, T=150):
 def calc_lambda3_features_v2(data, window=10, delta_percentile=97):
     """
     Calculate directionally separated jump features (ΔΛC_pos, ΔΛC_neg),
-    local volatility (ρT), and sequential index (time_trend).
+    local volatility (ρT), and sequential index (time_trend=Transaction_trend).
     """
     diff = np.diff(data, prepend=data[0])
     threshold = np.percentile(np.abs(diff), delta_percentile)
