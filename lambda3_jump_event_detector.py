@@ -1,3 +1,10 @@
+"""
+Note:
+    The variable 'T' (and arrays like np.arange(T)) represent *transaction steps* or *progress indices*, 
+    not 'time' in the traditional sense. 
+    In Lambda³ theory, this axis should be interpreted as generic progress (transaction) steps,
+    decoupled from physical time.
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 import pymc as pm
