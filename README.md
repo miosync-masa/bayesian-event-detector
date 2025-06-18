@@ -78,7 +78,7 @@ Uncomment the visualization lines in the script to plot the results.
 
 ## Example Output
 
-### Bayesian Decomposition (Classic Model)
+### Bayesian Decomposition (Standard Bayesian history-jump detector)
 
 ![Bayesian trend decomposition](sample1.png)
 
@@ -146,7 +146,7 @@ A next-generation Bayesian regression model implementing Lambda³ theory (Λ³),
 * Transaction-index based progress (can be time, transaction ID, or order)
 * Plug-and-play for science, finance, biology, and engineering
 
-### Lambda³ Model Example Output
+### Lambda³ version (directional, more advanced) Example Output 
 
 **Fit:**
 
