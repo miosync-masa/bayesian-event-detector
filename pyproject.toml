@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lambda3_jump_event_detector"
+version = "0.1.0"
+description = "Minimal, interpretable Bayesian jump event detector for time-series."
+authors = [
+  { name="Masamichi Iizumi", email="iizumimasamichi@gmail.com" }
+]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = [
+    "numpy==1.26.4",
+    "matplotlib==3.8.4",
+    "pymc==5.23.0",
+    "arviz==0.17.0",
+    "pytensor==2.31.3"
+]
