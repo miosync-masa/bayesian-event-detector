@@ -20,6 +20,26 @@ It includes dummy data generation, PyMC modeling, and optional result visualizat
 
 ---
 
+### What is a “Jump Event”? How is it different from “Changepoint” or “Outlier” Detection?
+
+A **jump event** is a sudden, discrete change in the value of a time series — for example, a price spike, a sudden drop, or a system shock.  
+- **Jump events** are not gradual; they represent *instantaneous jumps* in the data.
+- The model aims to *explain* these events: "When and where did a jump happen? How big was the impact? Was it positive or negative?"
+
+**How is this different from “changepoint” or “outlier” detection?**
+- **Changepoint detection** tries to find points where the *underlying process or trend* changes (e.g., slope or variance shifts), often leading to new, persistent behavior.
+- **Outlier detection** finds data points that are *rare or extreme* compared to the usual pattern—but doesn’t explain them, or treat them as meaningful structure.
+- **Jump event detection** focuses on *sudden, meaningful, and explainable* events—capturing both their direction and magnitude, and integrating them into the interpretation of the time series.
+
+> **Example:**  
+> In a financial time series, a “jump event” might represent a flash crash or price surge.  
+> In manufacturing, it could indicate a sudden fault or system reset.  
+> In molecular dynamics, it may capture an instantaneous conformational change.
+
+Lambda³ detects, quantifies, and explains these “jumps” — not just flags them.
+
+---
+
 ## Usage
 
 1. **Install required packages:**
