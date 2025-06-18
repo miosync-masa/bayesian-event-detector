@@ -1,3 +1,6 @@
-pymc
-numpy
-arviz
+numpy==1.26.4
+matplotlib==3.8.4
+pymc==5.13.1
+arviz==0.17.0
+# Optional, but recommended for full reproducibility with PyMC
+pytensor==2.19.0
