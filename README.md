@@ -46,26 +46,28 @@ Lambda³ detects, quantifies, and explains these “jumps” — not just flags 
 
 ---
 
-## Usage
+## Dependencies
+
+All dependencies are pinned for reproducibility.  
+You can use either `requirements.txt` (for quick pip install) or `pyproject.toml` (for modern Python workflows).
+
+**Option 1:**  
+pip install -r requirements.txt
+
+**Option 2:**  
+If you use poetry or pip with pyproject.toml:
 
 1. **Install required packages:**
 
-   ```bash
-   pip install -r requirements.txt
-   ```
 2. **Run the sample code:**
 
-   ```bash
-   python event_jump_detector.py
-   ```
-3. **(Optional)**
+python event_jump_detector.py
 
-   Uncomment the visualization lines in the script to plot the results.
+3. **(Optional)**
+Uncomment the visualization lines in the script to plot the results.
 
 ---
-
 ## File Description
-
 * `event_jump_detector.py` ... Main sample code
 * `requirements.txt` ... List of required Python packages
 * `README.md` ... This description
