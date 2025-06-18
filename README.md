@@ -56,10 +56,7 @@ pip install -r requirements.txt
 
 **Option 2:**  
 If you use poetry or pip with pyproject.toml:
-
-pip install .
-# or
-poetry install .
+pip install .or poetry install .
 
 ## Usage
 **Run the sample code:**
