@@ -38,6 +38,12 @@ A **jump event** is a sudden, discrete change in the value of a time series — 
 
 Lambda³ detects, quantifies, and explains these “jumps” — not just flags them.
 
+| Detection Type   | Focus                                | Typical Use                          | Does it Explain? | Handles Direction/Magnitude? |
+|------------------|--------------------------------------|--------------------------------------|------------------|------------------------------|
+| Changepoint      | Process/Trend shifts (slope/variance)| Regime shift, new behavior           | No               | No                           |
+| Outlier          | Rare/extreme points                  | Data cleaning, anomaly flagging       | No               | No                           |
+| Jump Event (Λ³)  | Sudden, explainable, discrete events | Shocks, system jumps, event analysis  | Yes              | Yes (pos/neg & impact)       |
+
 ---
 
 ## Usage
