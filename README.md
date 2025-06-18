@@ -80,15 +80,15 @@ Uncomment the visualization lines in the script to plot the results.
 
 ### Bayesian Decomposition (Standard Bayesian history-jump detector)
 
-![Bayesian trend decomposition](sample1.png)
+![Bayesian trend decomposition](http://miosync.link/github/sample1.png)
 
 **Posterior for event probability:**
 
-![Posterior event probability](sample2.png)
+![Posterior event probability](http://miosync.link/github/sample2.png)
 
 **Posterior for trend and event parameters:**
 
-![Posterior for parameters](sample3.png)
+![Posterior for parameters](http://miosync.link/github/sample3.png)
 
 
 ## Advanced Usage: Visualization Example
@@ -150,11 +150,11 @@ A next-generation Bayesian regression model implementing Lambda³ theory (Λ³),
 
 **Fit:**
 
-![Lambda3 fit](Lambda_sample_fit.png)
+![Lambda3 fit](http://miosync.link/github/Lambda_sample_fit.png)
 
 **Posterior:**
 
-![Lambda3 posterior](Lambda_sample_posterior.png)
+![Lambda3 posterior](http://miosync.link/github/Lambda_sample_posterior.png)
 
 ---
 
