@@ -57,18 +57,23 @@ pip install -r requirements.txt
 **Option 2:**  
 If you use poetry or pip with pyproject.toml:
 
-1. **Install required packages:**
+pip install .
+# or
+poetry install .
 
-2. **Run the sample code:**
+## Usage
+**Run the sample code:**
+python event_jump_detector.py        # Standard Bayesian history-jump detector
+python lambda3_jump_event_detector.py # Lambda³ version (directional, more advanced)
 
-python event_jump_detector.py
-
-3. **(Optional)**
+. **(Optional)**
 Uncomment the visualization lines in the script to plot the results.
 
 ---
 ## File Description
-* `event_jump_detector.py` ... Main sample code
+* `event_jump_detector.py` ... Minimal baseline (history-jump detector)
+* `lambda3_jump_event_detector.py`... Lambda³ advanced model (directional jumps etc.)
+* `pyproject.toml`... Modern dependency management
 * `requirements.txt` ... List of required Python packages
 * `README.md` ... This description
 
