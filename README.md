@@ -146,6 +146,13 @@ A next-generation Bayesian regression model implementing Lambda³ theory (Λ³),
 * Transaction-index based progress (can be time, transaction ID, or order)
 * Plug-and-play for science, finance, biology, and engineering
 
+## 🧪 Testing
+
+Basic tests for the Lambda³ jump event detector are included in `test_lambda3_event_jump_detector.py`.
+
+To run all tests:
+pip install pytest
+
 ### Lambda³ version (directional, more advanced) Example Output 
 
 **Fit:**
