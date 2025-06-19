@@ -26,6 +26,16 @@ Dual EYE Mode allows users to:
 
 Check out the new examples and docs to see Dual EYE Mode in action!
 
+
+**Fit:**
+
+![Lambda3 fit](http://miosync.link/github/download-12.png)
+
+**Posterior:**
+
+![Lambda3 posterior](http://miosync.link/github/download-11.png)
+
+
 # bayesian-event-detector
 
 A minimal sample for detecting time-series jump events using Bayesian inference.
