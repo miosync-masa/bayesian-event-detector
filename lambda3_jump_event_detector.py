@@ -4,8 +4,6 @@ import arviz as az
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
-print("PyMC version:", pymc.__version__)
-
 # ===============================
 # Lambda³ Config Class
 # ===============================
