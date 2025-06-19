@@ -1,3 +1,8 @@
+# bayesian-event-detector
+
+A minimal sample for detecting time-series jump events using Bayesian inference.
+---
+
 ## 🚀 NEW: Dual EYE Mode for Jump Event Detection
 
 Lambda³ now supports **Dual EYE Mode**, an advanced feature that enables simultaneous detection of both **global (macro) structural changes** and **local (micro) contextual anomalies** in time series data.
@@ -34,11 +39,6 @@ Check out the new examples and docs to see Dual EYE Mode in action!
 **Posterior:**
 
 ![Lambda3 posterior](http://miosync.link/github/download-11.png)
-
-
-# bayesian-event-detector
-
-A minimal sample for detecting time-series jump events using Bayesian inference.
 
 ---
 
