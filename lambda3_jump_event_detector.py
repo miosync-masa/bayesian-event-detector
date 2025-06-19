@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pymc as pm
 import arviz as az
+import pytensor
 
 """
 Note:
