@@ -1,3 +1,31 @@
+## 🚀 NEW: Dual EYE Mode for Jump Event Detection
+
+Lambda³ now supports **Dual EYE Mode**, an advanced feature that enables simultaneous detection of both **global (macro) structural changes** and **local (micro) contextual anomalies** in time series data.
+
+### What is Dual EYE Mode?
+
+- **Global Eye**: Detects history-wide, statistically significant jump events ("phase shifts") using global percentiles (ΔΛC). Perfect for capturing major regime changes, such as financial crises or structural breaks in physical systems.
+- **Local Eye**: Detects context-sensitive, locally significant jumps using moving-window normalized scores. Ideal for finding subtle "precursors," micro-anomalies, or localized events that may not stand out globally but are surprising in their immediate context.
+
+**Visualizations now highlight both types of events:**
+- Blue/Orange markers: Global jumps (positive/negative)
+- Magenta markers: Local jumps (contextual anomalies)
+
+### Why is this important?
+
+By providing both "forest-level" (macro) and "tree-level" (micro) perspectives,  
+Dual EYE Mode allows users to:
+- Spot **major disruptions** and **minor anomalies** in a single unified framework.
+- Gain deeper insights into the interplay between **system-wide phase transitions** and **localized precursors** or warnings.
+- Apply Lambda³ to real-world problems—ranging from finance and engineering to biology and geophysics—where both scales of anomaly matter.
+
+---
+
+> **Lambda³ is evolving from a single-eye (mono) anomaly detector  
+> to a true "stereo vision" AI—capable of seeing the whole and the details together.**
+
+Check out the new examples and docs to see Dual EYE Mode in action!
+
 # bayesian-event-detector
 
 A minimal sample for detecting time-series jump events using Bayesian inference.
