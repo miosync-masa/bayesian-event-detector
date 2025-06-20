@@ -203,8 +203,17 @@ pip install pytest
 
 ![Lambda3 posterior](http://miosync.link/github/Lambda_sample_posterior.png)
 
----
 
+## Performance
+
+- Colab A100 (CPU backend): 300 time steps × 4 params, 6000 samples, ~14 seconds
+- No divergences, rapid convergence
+- Supports large time-series (T > 1000) with additional tuning
+- Want blazing speed? Use NumPyro backend on GPU
+
+> Note: The demo runs great on both laptops and cloud GPUs. Colab A100 will give you extra headroom for bigger or more complex models.
+
+---
 ## License
 
 MIT License
