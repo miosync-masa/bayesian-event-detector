@@ -93,6 +93,61 @@ def calc_lambda3_features_v2(data, config: L3Config):
 
     return delta_LambdaC_pos, delta_LambdaC_neg, rho_T, time_trend, local_jump_detect
 
+
+# ===============================
+#  Feature view
+# ===============================
+
+class Lambda3BayesianExtended:
+    def __init__(self, config: L3Config):
+        self.config = config
+        self.event_memory = []  # ΔΛC event history
+        self.structure_evolution = []  # Λ structure history
+
+    def update_event_memory(self, delta_LambdaC_pos, delta_LambdaC_neg):
+        event = {
+            'pos': delta_LambdaC_pos,
+            'neg': delta_LambdaC_neg
+        }
+        self.event_memory.append(event)
+
+    def update_structure(self, Lambda_tensor):
+        self.structure_evolution.append(Lambda_tensor)
+
+    def detect_causality_chain(self):
+        # Simple causality chain detection example
+        if len(self.event_memory) < 2:
+            return None  # Need at least two events for causality
+        
+        # Very simple logic: if positive jump often precedes negative jump
+        pos_to_neg_transitions = sum(
+            self.event_memory[i]['pos'] and self.event_memory[i+1]['neg']
+            for i in range(len(self.event_memory)-1)
+        )
+        total_pos_events = sum(event['pos'] for event in self.event_memory[:-1])
+        
+        if total_pos_events == 0:
+            return 0
+        return pos_to_neg_transitions / total_pos_events
+
+    def predict_next_event(self):
+        # Bayesian-based predictive logic (very simplified)
+        recent_events = np.array([
+            event['pos'] - event['neg'] for event in self.event_memory[-self.config.window:]
+        ])
+        
+        # If recent trend is positive jumps, predict a negative jump coming soon
+        trend = np.mean(recent_events)
+        
+        if trend > 0.5:
+            prediction = 'negative_jump_expected'
+        elif trend < -0.5:
+            prediction = 'positive_jump_expected'
+        else:
+            prediction = 'stable'
+        
+        return prediction
+
 # ===============================
 # 3. Lambda³ Bayesian Regression Model
 # ===============================
@@ -187,23 +242,30 @@ def plot_l3_prediction(
 # 6. Main Execution Pipeline
 # ===============================
 def main():
-    config = L3Config()  # Centralized configuration
+    config = L3Config()
 
-    # 1. Generate synthetic data
+    # Generate synthetic data
     data, trend, jumps = generate_data_pattern(config)
 
-    # 2. Calculate Lambda³ features (both global & local jump events)
+    # Calculate Lambda³ features
     delta_LambdaC_pos, delta_LambdaC_neg, rho_T, time_trend, local_jump_detect = calc_lambda3_features_v2(data, config)
 
-    # 3. Bayesian regression using global jump features
+    # Initialize the extended Lambda3 Bayesian framework
+    lambda3_ext = Lambda3BayesianExtended(config)
+
+    # Update event memory for causality detection
+    for pos, neg in zip(delta_LambdaC_pos, delta_LambdaC_neg):
+        lambda3_ext.update_event_memory(pos, neg)
+
+    # Bayesian regression
     trace = fit_l3_bayesian_regression_v2(
         data, delta_LambdaC_pos, delta_LambdaC_neg, rho_T, time_trend, config
     )
 
-    # 4. Visualize posterior distributions (key model parameters)
+    # Visualize posterior distributions
     plot_posterior(trace, var_names=config.var_names, hdi_prob=config.hdi_prob)
 
-    # 5. Calculate and plot prediction (with jump events overlay)
+    # Predictive visualization
     summary = az.summary(trace, var_names=['beta_0', 'beta_time', 'beta_dLC_pos', 'beta_dLC_neg', 'beta_rhoT'])
     mu_pred = (
         summary.loc['beta_0', 'mean']
@@ -216,6 +278,14 @@ def main():
     plot_l3_prediction(
         data, mu_pred, delta_LambdaC_pos, delta_LambdaC_neg, time_trend, local_jump_detect=local_jump_detect
     )
+
+    # Detect causality and predict next event
+    causality_prob = lambda3_ext.detect_causality_chain()
+    next_event_prediction = lambda3_ext.predict_next_event()
+
+    # Output results
+    print(f"\nCausality Probability (Positive Jump → Negative Jump): {causality_prob:.2f}")
+    print(f"Predicted Next Event: {next_event_prediction}")
 
 if __name__ == '__main__':
     main()
