@@ -10,8 +10,8 @@ from dataclasses import dataclass
 @dataclass
 class L3Config:
     # --- Data generation parameters ---
-    pattern: str = "single_jump"  # Data scenario: choose from 'single_jump', 'multi_jump', etc.
-    T: int = 400                  # Number of time steps
+    pattern: str = "causal_chain"  # Data scenario: choose from 'single_jump', 'multi_jump', etc.
+    T: int = 300                  # Number of time steps
     seed: int = 42                # Random seed for reproducibility
 
     # --- Lambda³ feature extraction parameters ---
@@ -38,12 +38,13 @@ def generate_data_pattern(config: L3Config):
     This is used for demonstrating and testing the Lambda³ jump event detection pipeline.
     """
     np.random.seed(config.seed)
-    trend = 0.05 * np.arange(config.T) + np.sin(np.arange(config.T) * 0.2)
+    t = np.arange(config.T)
+    trend = 0.05 * t + np.sin(t * 0.2)
     jumps = np.zeros(config.T)
     noise_std = 0.5
-
+    
     if config.pattern == "no_jump":
-        pass  # No explicit jump events
+        pass
     elif config.pattern == "single_jump":
         jumps[60] = 8.0
     elif config.pattern == "multi_jump":
@@ -56,6 +57,21 @@ def generate_data_pattern(config: L3Config):
         trend[75:] += 10
     elif config.pattern == "noisy":
         noise_std = 1.5
+    elif config.pattern == "hidden_jump_noise":
+        jumps[50] = 1.2; jumps[95] = -1.5
+        noise_std = 1.0
+    elif config.pattern == "periodic_plus_jump":
+        trend = 2.0 * np.sin(t * 0.15)
+        jumps[40] = 4.0; jumps[90] = -3.5
+        jumps[120] = 2.5
+    elif config.pattern == "causal_chain":
+        jumps[20] = 5.0; jumps[23] = -4.5
+        jumps[60] = 3.0; jumps[65] = -3.2
+        jumps[100] = 7.0; jumps[108] = -7.1
+    elif config.pattern == "overlapping_events":
+        jumps[50] = 8.0
+        jumps[50] += np.random.uniform(-0.5, 0.5)  
+        jumps[80] = -3.0; jumps[80] += 0.7
 
     noise = np.random.randn(config.T) * noise_std
     data = trend + jumps + noise
@@ -147,6 +163,54 @@ class Lambda3BayesianExtended:
             prediction = 'stable'
         
         return prediction
+        
+    def detect_time_dependent_causality(self, lag_window=10):
+        causality_by_lag = {}
+        
+        for lag in range(1, lag_window+1):
+            count_pairs = 0
+            count_pos = 0
+            
+            for i in range(len(self.event_memory)-lag):
+                if self.event_memory[i]['pos']:
+                    count_pos += 1
+                    if self.event_memory[i+lag]['neg']:
+                        count_pairs += 1
+            
+            causality_by_lag[lag] = count_pairs / max(count_pos, 1)
+        
+        return causality_by_lag
+
+# --- ⬇⬇⬇  Expansion Ideas ⬇⬇⬇ ---
+
+        # [Expansion Ideas]
+        # 1. Multiclass Forecasting:
+        #    - Add more event types: "major jump," "minor jump," "noise fluctuation," etc.
+        #    - Could also predict "no event" (quiescence).
+        #
+        # 2. Time Series Model Integration:
+        #    - Use LSTM or Bayesian time series models on event_memory for richer trend prediction.
+        #    - Predict not just type, but also *timing* of the next event.
+        #
+        # 3. Markov/Hidden Markov State Transitions:
+        #    - Use N-step history to model transition probabilities (P(next_event | past_events)).
+        #    - Could output a probability distribution over possible next events.
+        #
+        # 4. Feature Expansion:
+        #    - Include other features such as "rho_T", local volatility, jump interval statistics, etc.
+        #    - This can improve accuracy, especially in complex signals.
+        #
+        # 5. Periodicity and Anomaly Detection:
+        #    - Detect if events follow a periodic or bursty pattern, and predict accordingly.
+        #    - "Sudden jumps after long quiet" can be modeled with dedicated logic.
+        #
+        # 6. Uncertainty Estimation:
+        #    - Use Bayesian inference to report not just a forecast, but also the confidence/credible interval.
+        #
+        # [Implementation Ideas]
+        # - Return richer output: {'type': ..., 'prob': ..., 'expected_in': ...}
+        # - Use posterior predictive sampling to simulate future event chains and average outcomes.
+        # - Allow the user to set thresholds for what counts as "expected" or "significant."
 
 # ===============================
 # 3. Lambda³ Bayesian Regression Model
@@ -238,6 +302,20 @@ def plot_l3_prediction(
     plt.grid(axis='y', linestyle=':', alpha=0.7)
     plt.show()
 
+def plot_time_dependent_causality(causality_by_lag):
+    """
+    Plots the lag-dependent causality probability from positive to negative jump events.
+    """
+    lags = list(causality_by_lag.keys())
+    probs = list(causality_by_lag.values())
+    plt.figure(figsize=(7,3))
+    plt.bar(lags, probs, color='royalblue', alpha=0.7)
+    plt.xlabel("Lag (steps)")
+    plt.ylabel("Causality P(Pos→Neg)")
+    plt.title("Time-Dependent Causality: Positive Jump → Negative Jump")
+    plt.tight_layout()
+    plt.show()
+    
 # ===============================
 # 6. Main Execution Pipeline
 # ===============================
@@ -283,9 +361,15 @@ def main():
     causality_prob = lambda3_ext.detect_causality_chain()
     next_event_prediction = lambda3_ext.predict_next_event()
 
+    # --- NEW: Time-dependent causality analysis ---
+    lag_window = 10
+    causality_by_lag = lambda3_ext.detect_time_dependent_causality(lag_window=lag_window)
+    plot_time_dependent_causality(causality_by_lag)
+
     # Output results
     print(f"\nCausality Probability (Positive Jump → Negative Jump): {causality_prob:.2f}")
     print(f"Predicted Next Event: {next_event_prediction}")
+    print(f"Time-Dependent Causality (lag steps → P):\n{causality_by_lag}")
 
 if __name__ == '__main__':
     main()
