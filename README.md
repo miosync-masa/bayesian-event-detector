@@ -2,6 +2,8 @@
 
 A minimal sample for detecting time-series jump events using Bayesian inference.
 
+My code grew up overnight into a "Future-predictive Jump-driven Network Interaction Clustering Multivariate Bayesian" monster.
+Wait… Wasn’t this supposed to be *just* Bayesian regression?! 😇
 
 ---
 
