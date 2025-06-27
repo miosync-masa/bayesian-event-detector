@@ -1,5 +1,9 @@
-# Λ³ABC = Lambda³ Analytics: Bayes & CausalJunction
-
+# ==========================================================
+# Λ³ABC: Lambda³ Analytics for Bayes & CausalJunction
+# ----------------------------------------------------------
+# To install required packages, run this command FIRST:
+# !pip install yfinance pandas
+# ==========================================================
 # ===============================
 #  import
 # ===============================
