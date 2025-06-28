@@ -33,6 +33,7 @@ This repository showcases the evolution of Lambda³ (Λ³)–based event-driven 
 - **Integrated Lambda³ tensor analysis & network extraction.**
     - Batch calculation of event synchronization/asymmetric regression for all pairs
     - Fully customizable thresholds, window sizes, and sampling params
+    - JIT-accelerated: Built-in Numba JIT for ultra-fast event detection and synchronization, even with large time series.
     - Global network structure extraction and visualization
     - Colab/Jupyter compatible, OSS-first design  
     - *Use*: Event-driven network diagnosis, structural analysis of complex systems  
