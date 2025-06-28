@@ -25,7 +25,8 @@ This repository showcases the evolution of Lambda³ (Λ³)–based event-driven 
 - **Asymmetric Bayesian regression & sync analysis for event series.**
     - PyMC-based causal regression (directional & sign-specific)
     - Synchronization rate $\sigma_s(\tau)$ with lag optimization
-    - Outputs network graph visualizations  
+    - Outputs network graph visualizations
+    - JIT-accelerated: Built-in Numba JIT for ultra-fast event detection and synchronization, even with large time series.
     - *Use*: Causal inference for jump propagation, lagged network analysis  
     - [Colab Demo](https://colab.research.google.com/drive/1KnXwokc-eiBH5bBvPGNxlp2AS0BQfpO5?usp=sharing)
 
