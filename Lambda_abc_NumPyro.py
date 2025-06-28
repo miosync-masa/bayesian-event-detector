@@ -24,6 +24,7 @@ import seaborn as sns
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Any
 import networkx as nx
+from sklearn.cluster import SpectralClustering, KMeans
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 import warnings
@@ -2468,6 +2469,111 @@ def plot_sync_network_pymc_style(G: nx.DiGraph):
     nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
     plt.title("Synchronization (σₛ) Network")
     plt.show()
+
+# sync_matrix_simple関数とその関連関数を追加
+def calculate_sync_profile_simple(series_a: np.ndarray, series_b: np.ndarray, 
+                                lag_window: int = 10) -> Tuple[np.ndarray, float, int]:
+    """
+    シンプルな同期プロファイル計算（PyMC版と同じ）
+    
+    Returns:
+        sync_profile: 各ラグでの同期率
+        max_sync: 最大同期率
+        optimal_lag: 最適ラグ
+    """
+    n = len(series_a)
+    lags = np.arange(-lag_window, lag_window + 1)
+    sync_profile = np.zeros(len(lags))
+    
+    for i, lag in enumerate(lags):
+        if lag < 0:
+            # series_a leads series_b
+            abs_lag = -lag
+            if abs_lag < n:
+                sync_rate = np.mean(series_a[abs_lag:] * series_b[:-abs_lag])
+            else:
+                sync_rate = 0.0
+        elif lag > 0:
+            # series_b leads series_a
+            if lag < n:
+                sync_rate = np.mean(series_a[:-lag] * series_b[lag:])
+            else:
+                sync_rate = 0.0
+        else:
+            # No lag
+            sync_rate = np.mean(series_a * series_b)
+        
+        sync_profile[i] = sync_rate
+    
+    max_sync = np.max(sync_profile)
+    optimal_lag = lags[np.argmax(sync_profile)]
+    
+    return sync_profile, max_sync, optimal_lag
+
+def sync_matrix_simple(event_series_dict: Dict[str, np.ndarray], 
+                      lag_window: int = 10) -> Tuple[np.ndarray, List[str]]:
+    """
+    シンプルな同期行列計算（PyMC版と互換）
+    
+    Args:
+        event_series_dict: イベント系列の辞書
+        lag_window: ラグウィンドウサイズ
+        
+    Returns:
+        sync_matrix: 同期行列
+        series_names: 系列名のリスト
+    """
+    series_names = list(event_series_dict.keys())
+    n = len(series_names)
+    sync_mat = np.zeros((n, n))
+    
+    for i, name_a in enumerate(series_names):
+        for j, name_b in enumerate(series_names):
+            if i == j:
+                sync_mat[i, j] = 1.0  # 自己同期は完全
+            else:
+                series_a = np.asarray(event_series_dict[name_a])
+                series_b = np.asarray(event_series_dict[name_b])
+                
+                # 同期プロファイル計算
+                _, max_sync, _ = calculate_sync_profile_simple(series_a, series_b, lag_window)
+                sync_mat[i, j] = max_sync
+    
+    return sync_mat, series_names
+
+def cluster_series_by_sync_simple(event_series_dict: Dict[str, np.ndarray],
+                                 lag_window: int = 10,
+                                 n_clusters: int = 3) -> Tuple[Dict[str, int], np.ndarray]:
+    """
+    同期行列に基づくクラスタリング（PyMC版と互換）
+    
+    Args:
+        event_series_dict: イベント系列の辞書
+        lag_window: ラグウィンドウサイズ
+        n_clusters: クラスタ数
+        
+    Returns:
+        clusters: 各系列のクラスタ割り当て
+        sync_mat: 同期行列
+    """
+    from sklearn.cluster import SpectralClustering
+    
+    # 同期行列を計算
+    sync_mat, series_names = sync_matrix_simple(event_series_dict, lag_window)
+    
+    # スペクトラルクラスタリング
+    clustering = SpectralClustering(n_clusters=n_clusters, 
+                                   affinity='precomputed',
+                                   random_state=42)
+    
+    # 類似度行列として使用（0-1の範囲）
+    affinity_matrix = sync_mat
+    cluster_labels = clustering.fit_predict(affinity_matrix)
+    
+    # 辞書形式で返す
+    clusters = {name: int(label) for name, label in zip(series_names, cluster_labels)}
+    
+    return clusters, sync_mat    
 
 def comprehensive_sync_analysis_pymc_style(series_names: List[str], 
                                           features_dict: Dict[str, Dict[str, np.ndarray]]):
