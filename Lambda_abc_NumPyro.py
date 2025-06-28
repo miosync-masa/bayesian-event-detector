@@ -57,15 +57,15 @@ class L3ConfigNumPyro:
     delta_percentile: float = 97.0
     local_jump_percentile: float = 97.0
     # ベイジアンサンプリングパラメータ
-    num_samples: int = 2000  # MCMCサンプル数
-    num_warmup: int = 1000   # ウォームアップ
+    num_samples: int = 8000  # MCMCサンプル数
+    num_warmup: int = 8000   # ウォームアップ
     num_chains: int = 4      # MCMCチェーン数
     target_accept_prob: float = 0.95
     max_tree_depth: int = 10
     # 並列化パラメータ
     max_workers: int = 3     # Colab対応
     # 可視化パラメータ
-    hdi_prob: float = 0.93   # 信頼区間
+    hdi_prob: float = 0.94   # 信頼区間
 
 # ===============================
 # JAX-Compiled Feature Extraction
@@ -2254,6 +2254,9 @@ def main_lambda3_numpyro_analysis(csv_path: str = None,
         # PyMCスタイルの包括的同期解析を実行
         sync_matrix, sync_network = comprehensive_sync_analysis_pymc_style(series_names, features_dict)
         print(f"\nSynchronization analysis completed successfully")
+
+        # 出力行列のラベルとして使用
+        names = series_names        
         
         # sync_networkがNoneの場合の処理
         if sync_network is None:
