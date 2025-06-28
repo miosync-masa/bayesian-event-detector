@@ -57,15 +57,15 @@ class L3ConfigNumPyro:
     delta_percentile: float = 97.0
     local_jump_percentile: float = 97.0
     # ベイジアンサンプリングパラメータ
-    num_samples: int = 2000  # MCMCサンプル数
-    num_warmup: int = 1000   # ウォームアップ
+    num_samples: int = 8000  # MCMCサンプル数
+    num_warmup: int = 8000   # ウォームアップ
     num_chains: int = 4      # MCMCチェーン数
-    target_accept_prob: float = 0.8
+    target_accept_prob: float = 0.95
     max_tree_depth: int = 10
     # 並列化パラメータ
     max_workers: int = 3     # Colab対応
     # 可視化パラメータ
-    hdi_prob: float = 0.89   # 信頼区間
+    hdi_prob: float = 0.93   # 信頼区間
 
 # ===============================
 # JAX-Compiled Feature Extraction
@@ -1940,6 +1940,224 @@ def create_comprehensive_summary(series_dict: Dict[str, jnp.ndarray],
     
     print("\n" + "="*60)
 
+# Lambda_abc_NumPyro.py に追加する関数群
+
+# ===============================
+# 同期計算の修正版関数
+# ===============================
+
+def validate_event_series(event_series_dict: Dict[str, jnp.ndarray]):
+    """イベント系列の検証とデバッグ情報出力"""
+    print("\n🔍 EVENT SERIES VALIDATION:")
+    print("-" * 50)
+    
+    for name, series in event_series_dict.items():
+        series_np = np.array(series)
+        n_events = np.sum(series_np > 0)
+        event_rate = n_events / len(series_np) if len(series_np) > 0 else 0
+        
+        print(f"{name:15s} | Length: {len(series_np):4d} | Events: {n_events:3d} | Rate: {event_rate:.3f}")
+        
+        if n_events == 0:
+            print(f"  ⚠️  Warning: No events detected in {name}")
+        elif event_rate < 0.01:
+            print(f"  ⚠️  Warning: Very low event rate in {name}")
+    
+    print("-" * 50)
+
+@jax.jit
+def sync_profile_jax(series_a: jnp.ndarray, series_b: jnp.ndarray, 
+                     lag_window: int = 10) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """JAX最適化された同期プロファイル計算"""
+    n = len(series_a)
+    lags = jnp.arange(-lag_window, lag_window + 1)
+    n_lags = len(lags)
+    sync_values = jnp.zeros(n_lags)
+    
+    def compute_sync_at_lag(lag):
+        if lag < 0:
+            # 負のラグ: series_a が series_b より先行
+            abs_lag = -lag
+            valid_len = n - abs_lag
+            if valid_len > 0:
+                return jnp.mean(series_a[abs_lag:] * series_b[:valid_len])
+            else:
+                return 0.0
+        elif lag > 0:
+            # 正のラグ: series_b が series_a より先行
+            valid_len = n - lag
+            if valid_len > 0:
+                return jnp.mean(series_a[:valid_len] * series_b[lag:])
+            else:
+                return 0.0
+        else:
+            # ラグ0: 同期
+            return jnp.mean(series_a * series_b)
+    
+    # 各ラグでの同期率を計算
+    for i, lag in enumerate(lags):
+        sync_values = sync_values.at[i].set(compute_sync_at_lag(lag))
+    
+    return lags, sync_values
+
+def build_sync_matrix_jax_fixed(event_series_dict: Dict[str, jnp.ndarray], 
+                               lag_window: int = 10) -> Tuple[jnp.ndarray, List[str]]:
+    """修正版JAX同期行列構築（NumPyフォールバック付き）"""
+    
+    series_names = list(event_series_dict.keys())
+    n = len(series_names)
+    mat = np.zeros((n, n))  # NumPy配列で初期化
+    
+    print(f"Building sync matrix for {n} series...")
+    
+    for i, name_a in enumerate(series_names):
+        for j, name_b in enumerate(series_names):
+            if i == j:
+                mat[i, j] = 1.0  # 自己同期は完全
+                continue
+            
+            try:
+                # NumPy配列として取得
+                series_a = np.array(event_series_dict[name_a], dtype=np.float64)
+                series_b = np.array(event_series_dict[name_b], dtype=np.float64)
+                
+                # データ検証
+                if len(series_a) == 0 or len(series_b) == 0:
+                    print(f"  {name_a} → {name_b}: empty series, setting to 0")
+                    continue
+                
+                if len(series_a) != len(series_b):
+                    print(f"  {name_a} → {name_b}: length mismatch, setting to 0")
+                    continue
+                
+                # イベントの存在確認
+                events_a = np.sum(series_a > 0)
+                events_b = np.sum(series_b > 0)
+                
+                if events_a == 0 or events_b == 0:
+                    # イベントがない場合は相関係数を使用
+                    if np.std(series_a) > 0 and np.std(series_b) > 0:
+                        correlation = np.corrcoef(series_a, series_b)[0, 1]
+                        if not np.isnan(correlation):
+                            mat[i, j] = abs(correlation)
+                            print(f"  {name_a} → {name_b}: no events, using correlation: {abs(correlation):.4f}")
+                        else:
+                            mat[i, j] = 0.0
+                    else:
+                        mat[i, j] = 0.0
+                    continue
+                
+                # 同期率計算（NumPy版）
+                max_sync = 0.0
+                optimal_lag = 0
+                
+                for lag in range(-lag_window, lag_window + 1):
+                    if lag < 0:
+                        abs_lag = -lag
+                        if abs_lag < len(series_a):
+                            sync_rate = np.mean(series_a[abs_lag:] * series_b[:-abs_lag])
+                        else:
+                            sync_rate = 0.0
+                    elif lag > 0:
+                        if lag < len(series_b):
+                            sync_rate = np.mean(series_a[:-lag] * series_b[lag:])
+                        else:
+                            sync_rate = 0.0
+                    else:
+                        sync_rate = np.mean(series_a * series_b)
+                    
+                    if sync_rate > max_sync:
+                        max_sync = sync_rate
+                        optimal_lag = lag
+                
+                mat[i, j] = max_sync
+                print(f"  {name_a} → {name_b}: {max_sync:.4f} (lag: {optimal_lag})")
+                
+            except Exception as e:
+                print(f"  {name_a} → {name_b}: calculation failed ({e}), using 0")
+                mat[i, j] = 0.0
+    
+    # JAX配列に変換して返す
+    return jnp.array(mat), series_names
+
+def plot_sync_matrix_numpyro_fixed(sync_matrix: jnp.ndarray, series_names: List[str]):
+    """同期行列のヒートマップ表示（修正版）"""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
+    # NumPy配列に変換
+    sync_np = np.array(sync_matrix)
+    
+    # NaN値をチェック
+    if np.any(np.isnan(sync_np)):
+        print("Warning: NaN values in sync matrix, replacing with 0")
+        sync_np = np.nan_to_num(sync_np, nan=0.0)
+    
+    plt.figure(figsize=(10, 8))
+    
+    # ヒートマップ作成
+    sns.heatmap(sync_np, 
+                annot=True, 
+                fmt='.3f',
+                xticklabels=series_names,
+                yticklabels=series_names,
+                cmap="Blues", 
+                vmin=0, 
+                vmax=1,
+                square=True, 
+                cbar_kws={'label': 'Sync Rate σₛ'})
+    
+    plt.title("Synchronization Rate Matrix (σₛ)", fontsize=16)
+    plt.xlabel("Series")
+    plt.ylabel("Series")
+    plt.tight_layout()
+    plt.show()
+    
+    # 統計情報を出力
+    off_diagonal = []
+    n = len(series_names)
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                off_diagonal.append(sync_np[i, j])
+    
+    if off_diagonal:
+        print(f"\nSync Matrix Statistics:")
+        print(f"  Mean sync rate (off-diagonal): {np.mean(off_diagonal):.3f}")
+        print(f"  Max sync rate: {np.max(off_diagonal):.3f}")
+        print(f"  Min sync rate: {np.min(off_diagonal):.3f}")
+
+# ===============================
+# main関数内で使用する修正版コード
+# ===============================
+def synchronization_analysis_section(series_names, features_dict):
+    """同期解析セクション（エラー処理強化版）"""
+    print("\nSynchronization analysis...")
+    try:
+        # イベント系列の準備
+        event_series_dict = {
+            name: features_dict[name]['delta_lambda_pos']
+            for name in series_names
+        }
+        
+        # イベント系列の検証
+        validate_event_series(event_series_dict)
+        
+        # 同期行列の計算（修正版を使用）
+        sync_matrix, names = build_sync_matrix_jax_fixed(event_series_dict, lag_window=10)
+        print(f"Synchronization matrix computed successfully")
+        
+        # 可視化（修正版を使用）
+        plot_sync_matrix_numpyro_fixed(sync_matrix, names)
+        
+        return sync_matrix, names
+        
+    except Exception as e:
+        print(f"Synchronization analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, series_names    
+
 # ===============================
 # Main Analysis Pipeline
 # ===============================
@@ -2219,13 +2437,20 @@ def main_lambda3_numpyro_analysis(csv_path: str = None,
             for name in series_names
         }
         
-        sync_matrix, names = build_sync_matrix_jax(event_series_dict, lag_window=10)
-        print(f"Synchronization matrix computed")
+        # イベント系列の検証
+        validate_event_series(event_series_dict)
         
-        # 可視化
-        plot_sync_matrix_numpyro(sync_matrix, names)
+        # 修正版の関数を使用
+        sync_matrix, names = build_sync_matrix_jax_fixed(event_series_dict, lag_window=10)
+        print(f"Synchronization matrix computed successfully")
+        
+        # 可視化（修正版を使用）
+        plot_sync_matrix_numpyro_fixed(sync_matrix, names)
+        
     except Exception as e:
         print(f"Synchronization analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
         sync_matrix = None
         names = list(series_dict.keys())
     
@@ -2358,6 +2583,438 @@ def main_lambda3_numpyro_analysis(csv_path: str = None,
                 
         except Exception as e:
             print(f"Causality analysis failed: {e}")
+    
+    return final_results
+
+# ===============================
+# PyMC互換レポート関数
+# ===============================
+
+def create_comprehensive_report_numpyro(results: Dict[str, Any]):
+    """
+    PyMC版と完全に同じフォーマットでレポートを生成
+    
+    Args:
+        results: 解析結果の辞書
+    """
+    series_dict = results.get('series_dict', {})
+    features_dict = results.get('features_dict', {})
+    inference_results = results.get('inference_results', {})
+    sync_matrix = results.get('sync_matrix')
+    series_names = results.get('series_names', list(series_dict.keys()))
+    scaling_info = results.get('scaling_info', {})
+    
+    print("\n" + "="*60)
+    print("COMPREHENSIVE LAMBDA³ ANALYSIS REPORT")
+    print("="*60)
+    
+    # 1. データ概要（PyMCスタイル）
+    print("\n📊 DATA OVERVIEW")
+    print("-" * 40)
+    if series_dict:
+        first_series = list(series_dict.keys())[0]
+        data_length = len(series_dict[first_series])
+        print(f"Time series length: {data_length}")
+        print(f"Number of series: {len(series_dict)}")
+        print(f"Series names: {', '.join(series_names)}")
+        
+        # データ統計
+        print("\nSeries Statistics:")
+        for name in series_names:
+            data = np.array(series_dict[name])
+            mean_val = np.mean(data)
+            std_val = np.std(data)
+            min_val = np.min(data)
+            max_val = np.max(data)
+            print(f"  {name:15s} | Mean: {mean_val:8.4f} | Std: {std_val:8.4f} | Range: [{min_val:.4f}, {max_val:.4f}]")
+    
+    # 2. Lambda³特徴量統計（PyMCと同じ形式）
+    print("\n🔍 LAMBDA³ FEATURE STATISTICS")
+    print("-" * 40)
+    print("Jump Event Statistics:")
+    print("Series          | Pos ΔΛC | Neg ΔΛC | Local | Mean ρT")
+    print("-" * 60)
+    
+    for name in series_names:
+        if name in features_dict:
+            features = features_dict[name]
+            pos_jumps = int(jnp.sum(features['delta_lambda_pos']))
+            neg_jumps = int(jnp.sum(features['delta_lambda_neg']))
+            local_jumps = int(jnp.sum(features.get('local_jump', 0)))
+            mean_rho = float(jnp.mean(features['rho_t']))
+            
+            print(f"{name:15s} | {pos_jumps:7d} | {neg_jumps:7d} | {local_jumps:5d} | {mean_rho:7.3f}")
+    
+    # 3. ベイジアン推論結果（PyMCスタイル）
+    if inference_results:
+        print("\n📈 BAYESIAN INFERENCE RESULTS")
+        print("-" * 40)
+        
+        for name, result in inference_results.items():
+            print(f"\nSeries: {name}")
+            samples = result['samples']
+            diagnostics = result['diagnostics']
+            
+            # パラメータ推定値
+            print("  Parameter Estimates:")
+            param_order = ['lambda_intercept', 'lambda_flow', 'lambda_struct_pos', 
+                          'lambda_struct_neg', 'rho_tension']
+            
+            for param in param_order:
+                if param in samples:
+                    values = np.array(samples[param])
+                    mean_val = np.mean(values)
+                    std_val = np.std(values)
+                    hdi_lower = np.percentile(values, 3)
+                    hdi_upper = np.percentile(values, 97)
+                    print(f"    {param:20s}: {mean_val:7.3f} ± {std_val:5.3f} HDI:[{hdi_lower:.3f}, {hdi_upper:.3f}]")
+            
+            # 診断統計
+            print("  Diagnostics:")
+            print(f"    Divergences: {diagnostics.get('divergences', 0)}")
+            print(f"    Accept prob: {diagnostics.get('accept_prob', 0):.3f}")
+            if 'energy' in diagnostics:
+                print(f"    Energy: {diagnostics['energy']:.3f}")
+            
+            # R-hat値
+            rhat_params = [k for k in diagnostics.keys() if k.startswith('rhat_')]
+            if rhat_params:
+                print("  Convergence (R-hat):")
+                for param in rhat_params:
+                    value = diagnostics[param]
+                    status = "✅" if value < 1.1 else "⚠️"
+                    print(f"    {param}: {value:.3f} {status}")
+    
+    # 4. 同期解析結果（PyMCスタイル）
+    if sync_matrix is not None and len(series_names) >= 2:
+        print("\n🔗 SYNCHRONIZATION ANALYSIS")
+        print("-" * 40)
+        
+        # 同期行列の要約
+        sync_np = np.array(sync_matrix)
+        n = len(series_names)
+        
+        # トップ同期ペア
+        print("Top Synchronization Pairs:")
+        sync_pairs = []
+        for i in range(n):
+            for j in range(i+1, n):
+                sync_rate = float(sync_np[i, j])
+                sync_pairs.append((sync_rate, series_names[i], series_names[j]))
+        
+        sync_pairs.sort(reverse=True)
+        for sync_rate, name_a, name_b in sync_pairs[:5]:
+            print(f"  {name_a:15s} ↔ {name_b:15s} | σₛ = {sync_rate:.3f}")
+        
+        # 平均同期率
+        off_diagonal = []
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    off_diagonal.append(sync_np[i, j])
+        
+        if off_diagonal:
+            mean_sync = np.mean(off_diagonal)
+            print(f"\nAverage sync rate (off-diagonal): {mean_sync:.3f}")
+    
+    # 5. 相互作用効果（存在する場合）
+    if 'analysis_results' in results and 'interaction_effects' in results['analysis_results']:
+        interaction_effects = results['analysis_results']['interaction_effects']
+        if interaction_effects:
+            print("\n🔄 CROSS-SERIES INTERACTION EFFECTS")
+            print("-" * 40)
+            
+            # 相互作用行列を構築
+            interaction_matrix = {}
+            for (name_a, name_b), effects in interaction_effects.items():
+                for effect_name, value in effects.items():
+                    if 'to' in effect_name:
+                        interaction_matrix[effect_name] = value
+            
+            # 表示
+            for key, value in sorted(interaction_matrix.items()):
+                if abs(value) > 0.01:  # 有意な効果のみ
+                    print(f"  {key}: β = {value:.3f}")
+    
+    # 6. レジーム解析（存在する場合）
+    if 'analysis_results' in results and 'regime_results' in results['analysis_results']:
+        regime_results = results['analysis_results']['regime_results']
+        if 'regime_stats' in regime_results:
+            print("\n🎯 MARKET REGIME ANALYSIS")
+            print("-" * 40)
+            
+            regime_stats = regime_results['regime_stats']
+            for regime_name, stats in sorted(regime_stats.items()):
+                freq_pct = stats['frequency'] * 100
+                mean_rho = stats['mean_rhoT']
+                print(f"  {regime_name}: {freq_pct:.1f}% frequency, Mean ρT: {mean_rho:.3f}")
+    
+    # 7. スケーリング情報（適用された場合）
+    if scaling_info:
+        problematic_count = sum(1 for info in scaling_info.values() if info['is_problematic'])
+        if problematic_count > 0:
+            print("\n⚙️ DATA PREPROCESSING")
+            print("-" * 40)
+            print(f"Scaling method applied: {scaling_info[series_names[0]]['scaling_method']}")
+            print(f"Problematic series fixed: {problematic_count}")
+            
+            for name, info in scaling_info.items():
+                if info['is_problematic']:
+                    print(f"  {name}: {', '.join(info['issues'])}")
+    
+    # 8. 実行サマリー
+    print("\n📊 EXECUTION SUMMARY")
+    print("-" * 40)
+    print(f"✅ Feature extraction: Complete")
+    print(f"✅ Bayesian inference: {len(inference_results)} series analyzed")
+    if sync_matrix is not None:
+        print(f"✅ Synchronization analysis: Complete")
+    print(f"✅ JAX backend: {jax.default_backend()}")
+    
+    print("\n" + "="*60)
+    print("END OF REPORT")
+    print("="*60)
+
+
+def plot_interaction_heatmap_pymc_style(interaction_results: Dict[str, Dict[str, float]],
+                                       series_names: List[str]):
+    """PyMCスタイルの相互作用ヒートマップ"""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
+    n = len(series_names)
+    interaction_matrix = np.zeros((n, n))
+    
+    # 行列を構築（PyMCと同じロジック）
+    for i, name_a in enumerate(series_names):
+        for j, name_b in enumerate(series_names):
+            if name_a != name_b:
+                # B → A の影響を探す
+                if name_a in interaction_results:
+                    key = f'{name_b}_to_{name_a}_pos'
+                    if key in interaction_results[name_a]:
+                        interaction_matrix[i, j] = interaction_results[name_a][key]
+                    elif f'interact_{name_b}' in interaction_results[name_a]:
+                        interaction_matrix[i, j] = interaction_results[name_a][f'interact_{name_b}']
+    
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(interaction_matrix,
+                xticklabels=series_names,
+                yticklabels=series_names,
+                annot=True, fmt='.3f',
+                cmap='RdBu_r', center=0,
+                square=True,
+                cbar_kws={'label': 'Interaction Coefficient β'})
+    plt.title("Cross-Series Interaction Effects\n(Column → Row)", fontsize=16)
+    plt.xlabel("From Series", fontsize=12)
+    plt.ylabel("To Series", fontsize=12)
+    plt.tight_layout()
+    plt.show()
+
+
+def create_analysis_summary_pymc_style(series_names: List[str],
+                                      sync_mat: jnp.ndarray,
+                                      features_dict: Dict[str, Dict[str, jnp.ndarray]]):
+    """PyMCスタイルの解析サマリー作成"""
+    print("\n" + "="*60)
+    print("ANALYSIS SUMMARY")
+    print("="*60)
+    
+    # Jump event statistics（PyMCと完全一致）
+    print("\nJump Event Statistics:")
+    print("-" * 40)
+    for name in series_names:
+        pos_jumps = int(jnp.sum(features_dict[name]['delta_lambda_pos']))
+        neg_jumps = int(jnp.sum(features_dict[name]['delta_lambda_neg']))
+        local_jumps = int(jnp.sum(features_dict[name].get('local_jump', 0)))
+        print(f"{name:15s} | Pos: {pos_jumps:3d} | Neg: {neg_jumps:3d} | Local: {local_jumps:3d}")
+    
+    # Top synchronizations（PyMCと完全一致）
+    print("\nTop Synchronization Pairs:")
+    print("-" * 40)
+    sync_pairs = []
+    sync_np = np.array(sync_mat)
+    for i, name_a in enumerate(series_names):
+        for j, name_b in enumerate(series_names):
+            if i < j:  # Only unique pairs
+                sync_pairs.append((sync_np[i, j], name_a, name_b))
+    
+    sync_pairs.sort(reverse=True)
+    for sync_rate, name_a, name_b in sync_pairs[:5]:
+        print(f"{name_a:15s} ↔ {name_b:15s} | σₛ = {sync_rate:.3f}")
+    
+    print("\n" + "="*60)
+
+
+def generate_pymc_compatible_output(analysis_results: Dict[str, Any]):
+    """PyMC版と完全互換の出力を生成"""
+    
+    # 1. 特徴量統計の表示
+    if 'features_dict' in analysis_results:
+        features_dict = analysis_results['features_dict']
+        series_names = list(features_dict.keys())
+        
+        print("\n📊 FEATURE EXTRACTION SUMMARY (PyMC Compatible)")
+        print("=" * 60)
+        
+        # PyMCと同じフォーマットで表示
+        for name in series_names:
+            features = features_dict[name]
+            n_pos = int(jnp.sum(features['delta_lambda_pos']))
+            n_neg = int(jnp.sum(features['delta_lambda_neg']))
+            avg_rho = float(jnp.mean(features['rho_t']))
+            print(f"  {name:15s} | Pos: {n_pos:3d} | Neg: {n_neg:3d} | ρT: {avg_rho:.3f}")
+    
+    # 2. ペア解析結果の表示
+    if 'analysis_results' in analysis_results and 'sync_profiles' in analysis_results['analysis_results']:
+        sync_profiles = analysis_results['analysis_results']['sync_profiles']
+        
+        print("\n🔄 PAIRWISE ANALYSIS RESULTS (PyMC Style)")
+        print("=" * 60)
+        
+        for (name_a, name_b), profile_data in sync_profiles.items():
+            max_sync = profile_data['max_sync']
+            optimal_lag = profile_data['optimal_lag']
+            print(f"\n[{name_a} ↔ {name_b}]")
+            print(f"  Sync Rate σₛ: {max_sync:.3f}")
+            print(f"  Optimal Lag: {optimal_lag} steps")
+    
+    # 3. 因果関係プロファイル
+    if 'analysis_results' in analysis_results and 'causality_results' in analysis_results['analysis_results']:
+        causality_results = analysis_results['analysis_results']['causality_results']
+        
+        print("\n📈 CAUSALITY ANALYSIS (PyMC Format)")
+        print("=" * 60)
+        
+        for (name_a, name_b), causality_data in causality_results.items():
+            print(f"\nCausality: {name_a} ↔ {name_b}")
+            for direction, profile in causality_data.items():
+                if isinstance(profile, dict) and profile:
+                    max_lag = max(profile.items(), key=lambda x: x[1])
+                    print(f"  {direction}: Peak at lag {max_lag[0]} (p={max_lag[1]:.3f})")
+
+
+# 既存の comprehensive_lambda3_analysis 関数を修正して統合
+def comprehensive_lambda3_analysis_with_pymc_report(csv_path: str = None,
+                                                   series_columns: Optional[List[str]] = None,
+                                                   run_diagnostics: bool = True,
+                                                   run_all_pairs: bool = True,
+                                                   max_pairs: int = None) -> Dict[str, Any]:
+    """
+    PyMCスタイルの包括的Lambda³解析（レポート機能統合版）
+    """
+    # Note: この関数は既存のLambda_abc_NumPyro.pyファイル内に追加して使用してください
+    # 以下のコードは参考実装です
+    
+    print("⚠️ この関数はLambda_abc_NumPyro.py内に統合して使用してください")
+    print("代わりにcreate_comprehensive_report_numpyro関数を既存コードで使用してください")
+    return None
+    
+    config = L3ConfigNumPyro(
+        num_samples=1000,
+        num_warmup=500,
+        num_chains=2,
+        target_accept_prob=0.8
+    )
+    
+    print("🚀 COMPREHENSIVE LAMBDA³ ANALYSIS (PyMC Compatible)")
+    print("=" * 60)
+    
+    # データ読み込みとスケーリング
+    if csv_path is None:
+        print("Fetching financial data...")
+        data_df = fetch_financial_data_numpyro()
+        if data_df is None:
+            return None
+        csv_path = "financial_data_numpyro.csv"
+    
+    series_dict = load_csv_to_jax(csv_path, series_columns)
+    
+    # スケーリング
+    if len(series_dict) > 0:
+        scaling_method = recommend_scaling_method(series_dict)
+        series_dict, scaling_info = preprocess_series_dict(
+            series_dict, 
+            scaling_method=scaling_method,
+            verbose=True
+        )
+    
+    # 特徴抽出
+    print("\nExtracting Lambda³ features...")
+    features_dict = {}
+    for name, data in series_dict.items():
+        features = extract_lambda3_features_jax(data, config)
+        features_dict[name] = features
+        
+        # PyMCスタイルの統計表示
+        n_pos = int(jnp.sum(features['delta_lambda_pos']))
+        n_neg = int(jnp.sum(features['delta_lambda_neg']))
+        avg_rho = float(jnp.mean(features['rho_t']))
+        print(f"  {name:15s} | Pos: {n_pos:3d} | Neg: {n_neg:3d} | ρT: {avg_rho:.3f}")
+    
+    # 高度解析
+    analyzer = Lambda3AdvancedAnalyzer(config)
+    
+    # ペア解析
+    if run_all_pairs and len(series_dict) >= 2:
+        print(f"\nRunning comprehensive pair analysis...")
+        pair_results = analyzer.analyze_all_pairs(
+            series_dict, features_dict, max_pairs=max_pairs
+        )
+    else:
+        pair_results = {}
+    
+    # その他の解析
+    regime_results = analyzer.detect_market_regimes(features_dict)
+    first_series = list(series_dict.keys())[0]
+    scale_breaks = analyzer.detect_scale_breaks(series_dict[first_series])
+    
+    # 条件付き同期
+    if len(features_dict) >= 2:
+        series_names = list(features_dict.keys())
+        conditional_sync = analyzer.calculate_conditional_sync(
+            features_dict[series_names[0]], 
+            features_dict[series_names[1]]
+        )
+    else:
+        conditional_sync = 0.0
+    
+    # 同期ネットワーク
+    if 'sync_profiles' in pair_results:
+        sync_network = build_sync_network_advanced(
+            pair_results['sync_profiles'], 
+            threshold=0.0
+        )
+    else:
+        sync_network = None
+    
+    # 結果統合
+    analysis_results = {
+        'regime_results': regime_results,
+        'scale_breaks': scale_breaks,
+        'conditional_sync': conditional_sync,
+        **pair_results
+    }
+    
+    # PyMCスタイルサマリー作成
+    create_analysis_summary_pymc_style(
+        list(series_dict.keys()), 
+        None,  # sync_matrixは別途計算
+        features_dict
+    )
+    
+    # 包括的レポート生成
+    final_results = {
+        'series_dict': series_dict,
+        'features_dict': features_dict,
+        'analysis_results': analysis_results,
+        'sync_network': sync_network,
+        'scaling_info': scaling_info
+    }
+    
+    # PyMC互換レポート出力
+    create_comprehensive_report_numpyro(final_results)
+    generate_pymc_compatible_output(final_results)
     
     return final_results
 
@@ -2642,8 +3299,6 @@ if __name__ == "__main__":
     # フル解析実行
     results = main_lambda3_numpyro_analysis(
         config=L3ConfigNumPyro(
-            num_samples=2000,
-            num_warmup=1000,
             num_chains=4,
             max_workers=3
         )
@@ -2653,3 +3308,4 @@ if __name__ == "__main__":
         print("\nLambda³ NumPyro analysis completed successfully!")
     else:
         print("\nAnalysis failed. Check data and configuration.")
+        
