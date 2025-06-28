@@ -137,16 +137,6 @@ Basic tests for the Lambda³ jump event detector are included in `test_lambda3_e
 To run all tests:
 pip install pytest
 
-### Lambda³ version (directional, more advanced) Example Output 
-
-**Fit:**
-
-![Lambda3 fit](http://miosync.link/github/Lambda_sample_fit.png)
-
-**Posterior:**
-
-![Lambda3 posterior](http://miosync.link/github/Lambda_sample_posterior.png)
-
 
 ## Performance
 
