@@ -86,7 +86,7 @@ pip install -r requirements.txt
 For Poetry or PEP517-compatible workflows:
 
 pip install .
-# or
+or
 poetry install
 
 ⸻
