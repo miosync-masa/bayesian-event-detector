@@ -117,64 +117,6 @@ Uncomment the visualization lines in the script to plot the results.
 * `README.md` ... This description
 
 ---
-
-## Example Output
-
-### Bayesian Decomposition (Standard Bayesian history-jump detector)
-
-![Bayesian trend decomposition](http://miosync.link/github/sample1.png)
-
-**Posterior for event probability:**
-
-![Posterior event probability](http://miosync.link/github/sample2.png)
-
-**Posterior for trend and event parameters:**
-
-![Posterior for parameters](http://miosync.link/github/sample3.png)
-
-
-## Advanced Usage: Visualization Example
-
-The following script shows how to visualize the decomposition of your time series into the inferred trend and detected event points (where the probability of an event exceeds 50%).
-
-```python
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Obtain summary statistics from the trace
-summary = az.summary(trace, var_names=['trend', 'event_indicator', 'jump_effect'])
-
-# Extract posterior means for trend and event indicator
-mean_trend = summary['mean'][summary.index.str.startswith('trend')]
-event_prob = summary['mean'][summary.index.str.startswith('event_indicator')]
-
-fig, ax = plt.subplots(figsize=(15, 6))
-ax.plot(data, 'o', color='gray', markersize=4, alpha=0.6, label='Original Data')
-ax.plot(mean_trend, color='C0', lw=2, label='Inferred Trend')
-
-# Highlight detected events (posterior probability > 0.5)
-event_detected_indices = np.where(event_prob > 0.5)[0]
-for idx in event_detected_indices:
-    ax.axvline(x=idx, color='C1', linestyle='--', alpha=0.7, label=f'Event Detected (t={idx})')
-
-ax.set_title('Decomposition of Time Series into Trend and Events', fontsize=16)
-ax.set_xlabel('Time Step', fontsize=12)
-ax.set_ylabel('Value', fontsize=12)
-
-# Remove duplicate labels
-handles, labels = ax.get_legend_handles_labels()
-by_label = dict(zip(labels, handles))
-ax.legend(by_label.values(), by_label.keys(), fontsize=12)
-
-plt.grid(axis='y', linestyle=':', alpha=0.7)
-plt.show()
-
-print("\nDetected event time points:")
-print(event_detected_indices)
-```
-
----
-
 ## Lambda³ Model: Paradigm Shift for Transactional Time-Series
 
 **File:** `lambda3_jump_event_detector.py`
@@ -219,7 +161,6 @@ pip install pytest
 ## License
 
 MIT License
-
 
 ---
 
