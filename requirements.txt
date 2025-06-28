@@ -1,6 +1,12 @@
 numpy==1.26.4
+pandas==2.2.2
 matplotlib==3.8.4
+seaborn==0.13.2
 pymc==5.13.1
 arviz==0.17.0
+pytensor==2.31.3
+scikit-learn==1.5.0
+networkx==3.3
+numba==0.59.1
 # Optional, but recommended for full reproducibility with PyMC
 pytensor==2.31.3
