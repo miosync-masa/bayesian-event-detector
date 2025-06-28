@@ -1,66 +1,94 @@
-# bayesian-event-detector
+# bayesian-event-detector Series
 
-A minimal sample for detecting time-series jump events using Bayesian inference.
+## 🧬 bayesian-event-detector Series: Code Evolution
 
-My code grew up overnight into a "Future-predictive Jump-driven Network Interaction Clustering Multivariate Bayesian" monster.
-Wait… Wasn’t this supposed to be *just* Bayesian regression?! 😇
-
----
-
-## 🚀 NEW: Dual EYE Mode for Jump Event Detection
-
-Lambda³ now supports **Dual EYE Mode**, an advanced feature that enables simultaneous detection of both **global (macro) structural changes** and **local (micro) contextual anomalies** in time series data.
-
-### What is Dual EYE Mode?
-
-- **Global Eye**: Detects history-wide, statistically significant jump events ("phase shifts") using global percentiles (ΔΛC). Perfect for capturing major regime changes, such as financial crises or structural breaks in physical systems.
-- **Local Eye**: Detects context-sensitive, locally significant jumps using moving-window normalized scores. Ideal for finding subtle "precursors," micro-anomalies, or localized events that may not stand out globally but are surprising in their immediate context.
-
-**Visualizations now highlight both types of events:**
-- Blue/Orange markers: Global jumps (positive/negative)
-- Magenta markers: Local jumps (contextual anomalies)
-
-### Why is this important?
-
-By providing both "forest-level" (macro) and "tree-level" (micro) perspectives,  
-Dual EYE Mode allows users to:
-- Spot **major disruptions** and **minor anomalies** in a single unified framework.
-- Gain deeper insights into the interplay between **system-wide phase transitions** and **localized precursors** or warnings.
-- Apply Lambda³ to real-world problems—ranging from finance and engineering to biology and geophysics—where both scales of anomaly matter.
+This repository showcases the evolution of Lambda³ (Λ³)–based event-driven time series analysis, from a minimal single-series jump detector to a full tensor-based structural network extractor.
 
 ---
 
-> **Lambda³ is evolving from a single-eye (mono) anomaly detector  
-> to a true "stereo vision" AI—capable of seeing the whole and the details together.**
+### 1️⃣ `event_jump_detector.py` (1st Ver.)
 
-Check out the new examples and docs to see Dual EYE Mode in action!
-
-
-**Fit:**
-
-![Lambda3 fit](http://miosync.link/github/fig10.png)
-
-**Posterior:**
-
-![Lambda3 posterior](http://miosync.link/github/download.png)
+- **Description:** Minimal single-series jump event detector.
+- **Features:**
+  - First-order difference & percentile thresholding for jump detection
+  - Computes local volatility ("structural tension")
+  - Automatically catalogs jump events in a time series
+- **Typical Use:** Anomaly detection, preprocessing, local stress monitoring  
+- **Demo:** [Colab Notebook](https://colab.research.google.com/drive/1BHZJDMm-CJr6D041G_xuAlVNDUgPWvai?usp=sharing)
 
 ---
+
+### 2️⃣ `lambda3_jump_event_detector.py` (2nd Ver.)
+
+- **Description:** Multi-series jump detector based on Lambda³ theory.
+- **Features:**
+  - Extracts synchronous and asymmetric jump events across multiple time series
+  - Exports features for Bayesian regression
+  - Outputs basic correlation and lag profiles
+- **Typical Use:** Event synchronization analysis between financial pairs, network preprocessing
+
+---
+
+### 3️⃣ `dual_sync_bayesian.py` (3rd Ver.)
+
+- **Description:** Asymmetric Bayesian regression & synchronization analysis for binary event series.
+- **Features:**
+  - PyMC-based causal regression (directional & sign-specific)
+  - Calculates synchronization rate $\sigma_s(\tau)$ with lag optimization
+  - Outputs network graph visualizations
+- **Typical Use:** Causal inference for jump propagation paths, lagged network analysis  
+- **Demo:** [Colab Notebook](https://colab.research.google.com/drive/1KnXwokc-eiBH5bBvPGNxlp2AS0BQfpO5?usp=sharing)
+
+---
+
+### 4️⃣ `lambda3_abc.py` (4th Ver. / Latest)
+
+- **Description:** Integrated Lambda³ structural tensor analysis & network extraction framework.
+- **Features:**
+  - Automated batch calculation of event synchronization and asymmetric regression for all series pairs
+  - Fully customizable thresholds, window widths, and sampling parameters
+  - Global network structure extraction and visualization
+  - Complete Colab/Jupyter compatibility (OSS-first design)
+- **Typical Use:** Event-driven network diagnosis of financial markets, structural analysis of complex systems  
+- **Demo:** [Colab Notebook](https://colab.research.google.com/drive/1OxRTRsNwqUaEs8esj-plPO7ZJnXC-LZ5?usp=sharing)
+
+---
+
+> **All versions are open-source (MIT License).**  
+> Try any evolution stage instantly on Colab notebooks above!
+
 
 ## 🚀 Concept
 
-This repository demonstrates a paradigm shift in time-series analysis:
+> “Just a practical upgrade”—but a real paradigm shift in time-series event detection.
 
-> Instead of forcing all data to fit a single smooth law, our model explicitly separates "smooth trend" and "jump (event)" states, expressing reality as a *mixture of processes*.
-> Each parameter has a clear, human-interpretable meaning—allowing users not only to detect *when* and *where* an event occurred, but also *why* it occurred and with what certainty.
+Classical Bayesian approaches and VAR models are great… *until* you hit reality: financial markets, climate, or biological signals where the world is all jumps, switches, and surprises.  
+This repository exists because we (okay, I) got tired of the old, rigid “fit everything to a curve” approach.
+
+**Lambda³** (and its minimal demo here) separates the “smooth trend” from explicit “jump (event)” states—so you can track not just *when* and *where* something changes, but *why* (structurally) and *how confidently*.
+
+---
+
+- **No more curve-fitting tyranny.**  
+- **Events are *first-class citizens*.**
+- **Everything’s human-interpretable.**
+
+If you’ve ever thought,  
+> “Why is my Bayesian fit so blind to regime changes?”  
+or  
+> “I wish I could just *see* what caused that spike…”  
+then you’re in the right place.
 
 ---
 
 ## Overview
 
-This repository provides a minimal example for automatically detecting “jump (spike) events” in time-series data using Bayesian inference.
-It includes dummy data generation, PyMC modeling, and optional result visualization—all in one script.
-
----
+This repository is a bare-bones (but powerful) demo for **automatic “jump (spike) event” detection in time-series** via Bayesian inference.  
+Features:
+- Dummy data generation
+- Flexible event detection thresholding
+- PyMC modeling for structural event inference
+- Easy-to-follow visualization (if you want it)
 
 ### What is a “Jump Event”? How is it different from “Changepoint” or “Outlier” Detection?
 
@@ -86,73 +114,120 @@ Lambda³ detects, quantifies, and explains these “jumps” — not just flags 
 | Outlier          | Rare/extreme points                  | Data cleaning, anomaly flagging       | No               | No                           |
 | Jump Event (Λ³)  | Sudden, explainable, discrete events | Shocks, system jumps, event analysis  | Yes              | Yes (pos/neg & impact)       |
 
+## Visual Overview
+
+- **Lambda³ Analysis Pipeline**
+  ![](https://www.miosync.link/github/fig1.png)
+- **Jump Detection and Event-Fit Example**
+  ![](https://www.miosync.link/github/fig10.png)
+- **Posterior Distributions for Structural Coefficients**
+  ![](https://www.miosync.link/github/fig12.png)
+- **Cross-Series Interaction Matrix**
+  ![](https://www.miosync.link/github/fig13.png)
+- **Synchronization (σₛ) Network Visualization**
+  ![](https://www.miosync.link/github/fig14.png)
+
 ---
+🚀 Lambda³ Bayesian Jump Event Detector
 
-## Dependencies
+A paradigm shift in time-series analysis:
+Detect what, when, where… and why “events” occur in your data.
 
-All dependencies are pinned for reproducibility.  
-You can use either `requirements.txt` (for quick pip install) or `pyproject.toml` (for modern Python workflows).
+Instead of squeezing reality into a single smooth curve,
+Lambda³ models both continuous trends and sudden jump events as coexisting processes—
+with clear, human-interpretable parameters.
 
-**Option 1:**  
+⸻
+
+📦 File Structure
+
+| File                        | Description                                                         |
+|-----------------------------|---------------------------------------------------------------------|
+| `event_jump_detector.py`        | Minimal baseline “history-jump” Bayesian detector                   |
+| `lambda3_jump_event_detector.py`| Lambda³ advanced model (directional, asymmetric jumps)              |
+| `dual_sync_bayesian.py`         | Dual time-series analysis (asymmetric lag/sync detection, experimental) |
+| `lambda3_abc.py`                | Advanced: Λ³ Approximate Bayesian Computation module                |
+| `requirements.txt`              | Quick pip dependencies                                             |
+| `pyproject.toml`                | For modern Python workflows (poetry, PEP517/518, etc.)             |
+| `test_event_jump_detector.py`   | Minimal tests for baseline detector                                |
+| `test_lambda3_jump_event_detector.py` | Tests for Lambda³ advanced model                              |
+| `README.md`                     | This file                                                         |
+| `LICENSE`                       | MIT License                                                       |
+
+⸻
+
+🛠️ Installation
+
+All dependencies are pinned for full reproducibility.
+Option 1:
+
 pip install -r requirements.txt
 
-**Option 2:**  
-If you use poetry or pip with pyproject.toml:
-pip install .or poetry install .
+Option 2:
+If you prefer Poetry or PEP517-compatible workflows:
 
-## Usage
-**Run the sample code:**
-python event_jump_detector.py        # Standard Bayesian history-jump detector
-python lambda3_jump_event_detector.py # Lambda³ version (directional, more advanced)
+pip install .
+# or
+poetry install
 
-. **(Optional)**
-Uncomment the visualization lines in the script to plot the results.
+⸻
 
----
-## File Description
-* `event_jump_detector.py` ... Minimal baseline (history-jump detector)
-* `lambda3_jump_event_detector.py`... Lambda³ advanced model (directional jumps etc.)
-* `pyproject.toml`... Modern dependency management
-* `requirements.txt` ... List of required Python packages
-* `README.md` ... This description
+🚦 Usage (Quickstart)
 
----
-## Lambda³ Model: Paradigm Shift for Transactional Time-Series
+Standard Bayesian jump detector:
 
-**File:** `lambda3_jump_event_detector.py`
+python event_jump_detector.py
 
-A next-generation Bayesian regression model implementing Lambda³ theory (Λ³), focusing on “jump events,” trends, and local volatility. This approach uses **transaction index** rather than physical time, and separates jump directions.
+Lambda³ advanced model (direction, sign, local tension):
 
-### Key features:
+python lambda3_jump_event_detector.py
 
-* Directional jump detection (positive/negative)
-* Full Bayesian coefficient estimation for interpretability
-* Transaction-index based progress (can be time, transaction ID, or order)
-* Plug-and-play for science, finance, biology, and engineering
+Optional: Uncomment the visualization lines in the script to plot results.
 
-## 🧪 Testing
+⸻
 
-Basic tests for the Lambda³ jump event detector are included in `test_lambda3_event_jump_detector.py`.
+🔎 What is Lambda³?
 
-To run all tests:
-pip install pytest
+Lambda³ = Bayesian, event-driven modeling for time-series analysis.
+It separates smooth trends and jump events, models asymmetric & time-lagged interactions,
+and works with both physical time or transaction/order index.
+	•	Directional jump detection (positive/negative events)
+	•	Interpretability: All coefficients have real-world meaning
+	•	Modular: Use for finance, biology, physics, engineering…
+	•	Ready for batch, streaming, or transaction-indexed data
 
+Demo notebooks and real data examples are in the main paper and Colab.
 
-## Performance
+⸻
 
-- Colab A100 (CPU backend): 300 time steps × 4 params, 6000 samples, ~14 seconds
-- No divergences, rapid convergence
-- Supports large time-series (T > 1000) with additional tuning
-- Want blazing speed? Use NumPyro backend on GPU
+🧪 Testing
 
-> Note: The demo runs great on both laptops and cloud GPUs. Colab A100 will give you extra headroom for bigger or more complex models.
+Run basic tests (pytest required):
 
----
-## License
+pytest
+
+⸻
+
+⚡ Performance
+	•	Colab A100 (CPU backend): 300 time steps × 4 params, 6000 samples, ~14 seconds
+	•	No divergences, rapid convergence (thanks to PyMC tuning)
+	•	Scales well to large T (>1000) with some tuning
+	•	Pro tip: Use NumPyro backend + GPU for blazing speed!
+
+⸻
+
+📖 More Info
+	•	Official Paper/Preprint (Zenodo)
+	•	Colab/SSRN Notebook for full logs
+	•	See also: Lambda³ theory intro, model API docs, and examples.
+
+⸻
+
+📜 License
 
 MIT License
 
----
+⸻
 
 ## Citation & Contact
 
