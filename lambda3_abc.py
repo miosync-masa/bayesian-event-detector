@@ -1,9 +1,13 @@
 # ==========================================================
 # Λ³ABC: Lambda³ Analytics for Bayes & CausalJunction
-# ----------------------------------------------------------
-# To install required packages, run this command FIRST:
+# ----------------------------------------------------
+# Install required packages (run this line in your notebook or shell before execution):
 # !pip install yfinance pandas
-# ==========================================================
+#
+# Author: Mamichi Iizumi (Miosync, Inc.)
+# License: MIT
+# ----------------------------------------------------
+
 # ===============================
 #  import
 # ===============================
@@ -143,11 +147,11 @@ def fetch_financial_data(
 def calculate_diff_and_threshold(data: np.ndarray, percentile: float) -> Tuple[np.ndarray, float]:
     """
     JIT-compiled difference calculation and threshold computation.
-    
+
     Args:
         data: Input time series data
         percentile: Percentile for threshold calculation
-        
+
     Returns:
         diff: First differences of the data
         threshold: Calculated threshold value
@@ -165,11 +169,11 @@ def calculate_diff_and_threshold(data: np.ndarray, percentile: float) -> Tuple[n
 def detect_jumps(diff: np.ndarray, threshold: float) -> Tuple[np.ndarray, np.ndarray]:
     """
     JIT-compiled jump detection based on threshold.
-    
+
     Args:
         diff: First differences of time series
         threshold: Jump detection threshold
-        
+
     Returns:
         pos_jumps: Binary array indicating positive jumps
         neg_jumps: Binary array indicating negative jumps
@@ -190,11 +194,11 @@ def detect_jumps(diff: np.ndarray, threshold: float) -> Tuple[np.ndarray, np.nda
 def calculate_local_std(data: np.ndarray, window: int) -> np.ndarray:
     """
     JIT-compiled local standard deviation calculation.
-    
+
     Args:
         data: Input time series
         window: Window size for local calculation
-        
+
     Returns:
         local_std: Array of local standard deviations
     """
@@ -218,11 +222,11 @@ def calculate_rho_t(data: np.ndarray, window: int) -> np.ndarray:
     """
     JIT-compiled tension scalar (ρT) calculation.
     Represents local volatility/tension in the time series.
-    
+
     Args:
         data: Input time series
         window: Window size for calculation
-        
+
     Returns:
         rho_t: Array of tension scalar values
     """
@@ -247,12 +251,12 @@ def calculate_rho_t(data: np.ndarray, window: int) -> np.ndarray:
 def sync_rate_at_lag(series_a: np.ndarray, series_b: np.ndarray, lag: int) -> float:
     """
     JIT-compiled synchronization rate calculation for a specific lag.
-    
+
     Args:
         series_a: First binary event series
         series_b: Second binary event series
         lag: Time lag (positive = b lags a, negative = a lags b)
-        
+
     Returns:
         Synchronization rate at the specified lag
     """
@@ -274,12 +278,12 @@ def calculate_sync_profile_jit(series_a: np.ndarray, series_b: np.ndarray,
                                lag_window: int) -> Tuple[np.ndarray, np.ndarray, float, int]:
     """
     JIT-compiled synchronization profile calculation with parallelization.
-    
+
     Args:
         series_a: First binary event series
         series_b: Second binary event series
         lag_window: Maximum lag to consider
-        
+
     Returns:
         lags: Array of lag values
         sync_values: Synchronization rates at each lag
@@ -312,11 +316,11 @@ def calc_lambda3_features_v2(data: np.ndarray, config: L3Config) -> Tuple[np.nda
     """
     Wrapper for Lambda³ feature extraction using JIT-compiled functions.
     Extracts structural change (ΔΛC) and tension scalar (ρT) features.
-    
+
     Args:
         data: Input time series
         config: Lambda³ configuration
-        
+
     Returns:
         delta_pos: Positive structural changes (jumps)
         delta_neg: Negative structural changes (jumps)
@@ -352,7 +356,7 @@ def fit_l3_bayesian_regression_asymmetric(
     """
     Fit Bayesian regression model with asymmetric cross-series interactions.
     Models how one series influences another through structural changes.
-    
+
     Args:
         data: Target time series
         features_dict: Dictionary of Lambda³ features for target series
@@ -360,7 +364,7 @@ def fit_l3_bayesian_regression_asymmetric(
         interaction_pos: Positive jumps from influencing series
         interaction_neg: Negative jumps from influencing series
         interaction_rhoT: Tension scalar from influencing series
-        
+
     Returns:
         trace: PyMC InferenceData object with posterior samples
     """
@@ -371,7 +375,7 @@ def fit_l3_bayesian_regression_asymmetric(
         beta_dLC_pos = pm.Normal('beta_dLC_pos', mu=0, sigma=5)  # Own positive jumps
         beta_dLC_neg = pm.Normal('beta_dLC_neg', mu=0, sigma=5)  # Own negative jumps
         beta_rhoT = pm.Normal('beta_rhoT', mu=0, sigma=3)  # Own tension
-        
+
         # Base linear model
         mu = (
             beta_0
@@ -380,24 +384,24 @@ def fit_l3_bayesian_regression_asymmetric(
             + beta_dLC_neg * features_dict['delta_LambdaC_neg']
             + beta_rhoT * features_dict['rho_T']
         )
-        
+
         # Add asymmetric cross-series interactions if provided
         if interaction_pos is not None:
             beta_interact_pos = pm.Normal('beta_interact_pos', mu=0, sigma=3)
             mu += beta_interact_pos * interaction_pos
-            
+
         if interaction_neg is not None:
             beta_interact_neg = pm.Normal('beta_interact_neg', mu=0, sigma=3)
             mu += beta_interact_neg * interaction_neg
-            
+
         if interaction_rhoT is not None:
             beta_interact_stress = pm.Normal('beta_interact_stress', mu=0, sigma=2)
             mu += beta_interact_stress * interaction_rhoT
-        
+
         # Observation model
         sigma_obs = pm.HalfNormal('sigma_obs', sigma=1)
         y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma_obs, observed=data)
-        
+
         # Sample from posterior
         trace = pm.sample(
             draws=config.draws,
@@ -407,26 +411,26 @@ def fit_l3_bayesian_regression_asymmetric(
         )
     return trace
 
-def fit_l3_dynamic_bayesian(data, features_dict, config, 
+def fit_l3_dynamic_bayesian(data, features_dict, config,
                            change_points=None,  # Candidate structural change points
                            window_size=50):
     """
     Fit dynamic Bayesian model with time-varying parameters.
     Allows for regime changes and structural breaks.
-    
+
     Args:
         data: Time series data
         features_dict: Lambda³ features
         config: Model configuration
         change_points: List of potential change point locations
         window_size: Window for local parameter estimation
-        
+
     Returns:
         trace: Posterior samples
     """
     n = len(data)
     time_idx = np.arange(n)
-    
+
     with pm.Model() as model:
         # Time-varying parameter using Gaussian Random Walk
         beta_time_series = pm.GaussianRandomWalk(
@@ -435,7 +439,7 @@ def fit_l3_dynamic_bayesian(data, features_dict, config,
             sigma=0.1,
             shape=n
         )
-        
+
         # Structural change jumps at specified points
         jump_total = 0
         if change_points:
@@ -444,7 +448,7 @@ def fit_l3_dynamic_bayesian(data, features_dict, config,
                 jump_total += jump * (time_idx >= cp)
         else:
             jump_total = 0
-        
+
         # Dynamic model specification
         mu = (
             beta_time_series
@@ -474,14 +478,14 @@ class Lambda3RegimeDetector:
         self.method = method
         self.regime_labels = None
         self.regime_features = None
-    
+
     def fit(self, features_dict):
         """
         Estimate market regimes using clustering on Lambda³ features.
-        
+
         Args:
             features_dict: Dictionary containing jump and tension features
-            
+
         Returns:
             regime_labels: Array of regime assignments
         """
@@ -491,12 +495,12 @@ class Lambda3RegimeDetector:
             features_dict['delta_LambdaC_neg'],
             features_dict['rho_T']
         ])
-        
+
         from sklearn.cluster import KMeans
         km = KMeans(n_clusters=self.n_regimes, random_state=42)
         labels = km.fit_predict(X)
         self.regime_labels = labels
-        
+
         # Calculate regime statistics
         self.regime_features = {
             r: {
@@ -529,10 +533,10 @@ class Lambda3MultiScaleAnalyzer:
     def extract_features(self, data):
         """
         Extract features at each time scale.
-        
+
         Args:
             data: Input time series
-            
+
         Returns:
             scale_features: Dictionary of features by scale
         """
@@ -540,11 +544,11 @@ class Lambda3MultiScaleAnalyzer:
         for w in self.scales:
             # Rolling standard deviation at scale w
             rolling_std = np.array([np.std(data[max(0, i-w):i+1]) for i in range(len(data))])
-            
+
             # Jump detection at this scale
             diff = np.diff(data, prepend=data[0])
             jumps = np.abs(diff) > (np.percentile(np.abs(diff), 97))
-            
+
             self.scale_features[w] = {
                 'rolling_std': rolling_std,
                 'jumps': jumps
@@ -554,10 +558,10 @@ class Lambda3MultiScaleAnalyzer:
     def detect_scale_breaks(self, threshold=1.5):
         """
         Detect scale breaks - sudden increases in volatility.
-        
+
         Args:
             threshold: Number of standard deviations for break detection
-            
+
         Returns:
             breaks: List of (scale, time_indices) tuples
         """
@@ -578,13 +582,13 @@ def lambda3_conditional_sync(series_a, series_b, condition_series, condition_thr
     """
     Calculate conditional synchronization rate.
     Only considers periods where condition is met.
-    
+
     Args:
         series_a: First event series
         series_b: Second event series
         condition_series: Conditioning variable (e.g., tension)
         condition_threshold: Threshold for condition
-        
+
     Returns:
         Conditional synchronization rate
     """
@@ -599,11 +603,11 @@ def lambda3_conditional_sync(series_a, series_b, condition_series, condition_thr
 def lambda3_advanced_analysis(data, features_dict):
     """
     Comprehensive Lambda³ analysis combining multiple techniques.
-    
+
     Args:
         data: Time series data
         features_dict: Pre-computed Lambda³ features
-        
+
     Returns:
         Dictionary with analysis results
     """
@@ -661,7 +665,7 @@ class Lambda3BayesianExtended:
     def update_event_memory(self, events_dict: Dict[str, Dict[str, int]]):
         """
         Update event memory with new structural changes.
-        
+
         Args:
             events_dict: Dictionary of events by series
         """
@@ -672,10 +676,10 @@ class Lambda3BayesianExtended:
     def detect_causality_chain(self, series: str = 'A') -> Optional[float]:
         """
         Detect causality chains: positive jump followed by negative.
-        
+
         Args:
             series: Series name to analyze
-            
+
         Returns:
             Probability of causality chain
         """
@@ -696,11 +700,11 @@ class Lambda3BayesianExtended:
     def detect_time_dependent_causality(self, series: str = 'A', lag_window: int = LAG_WINDOW_DEFAULT) -> Dict[int, float]:
         """
         Calculate time-dependent causality probabilities at different lags.
-        
+
         Args:
             series: Series to analyze
             lag_window: Maximum lag to consider
-            
+
         Returns:
             Dictionary of causality probabilities by lag
         """
@@ -722,12 +726,12 @@ class Lambda3BayesianExtended:
     def detect_cross_causality(self, from_series: str, to_series: str, lag: int = 1) -> float:
         """
         Detect cross-causality between different series.
-        
+
         Args:
             from_series: Source series
             to_series: Target series
             lag: Time lag
-            
+
         Returns:
             Cross-causality probability
         """
@@ -748,12 +752,12 @@ def calculate_sync_profile(series_a: np.ndarray, series_b: np.ndarray,
                           lag_window: int = LAG_WINDOW_DEFAULT) -> Tuple[Dict[int, float], float, int]:
     """
     Calculate synchronization profile using JIT-compiled function.
-    
+
     Args:
         series_a: First binary event series
         series_b: Second binary event series
         lag_window: Maximum lag to consider
-        
+
     Returns:
         sync_profile: Dictionary of sync rates by lag
         max_sync: Maximum synchronization rate
@@ -773,12 +777,12 @@ def calculate_sync_profile(series_a: np.ndarray, series_b: np.ndarray,
 def calculate_sync_rate(series_a_events, series_b_events, lag_window=10):
     """
     Calculate synchronization rate σₛ between two event series.
-    
+
     Args:
         series_a_events: Binary event series A
         series_b_events: Binary event series B
         lag_window: Maximum lag to consider
-        
+
     Returns:
         max_sync: Maximum synchronization rate
         optimal_lag: Lag achieving maximum sync
@@ -800,13 +804,13 @@ def calculate_sync_rate(series_a_events, series_b_events, lag_window=10):
 def calculate_dynamic_sync(series_a_events, series_b_events, window=20, lag_window=10):
     """
     Calculate time-varying synchronization rate.
-    
+
     Args:
         series_a_events: Binary event series A
         series_b_events: Binary event series B
         window: Sliding window size
         lag_window: Maximum lag within each window
-        
+
     Returns:
         time_points: Time indices
         sync_rates: Synchronization rates over time
@@ -830,11 +834,11 @@ def calculate_dynamic_sync(series_a_events, series_b_events, window=20, lag_wind
 def sync_matrix(event_series_dict: Dict[str, np.ndarray], lag_window: int = LAG_WINDOW_DEFAULT) -> Tuple[np.ndarray, List[str]]:
     """
     Create synchronization rate matrix for all series pairs.
-    
+
     Args:
         event_series_dict: Dictionary of event series
         lag_window: Maximum lag to consider
-        
+
     Returns:
         mat: Synchronization matrix
         series_names: List of series names
@@ -861,12 +865,12 @@ def sync_matrix(event_series_dict: Dict[str, np.ndarray], lag_window: int = LAG_
 def cluster_series_by_sync(event_series_dict, lag_window=10, n_clusters=2):
     """
     Cluster time series based on synchronization patterns.
-    
+
     Args:
         event_series_dict: Dictionary of event series
         lag_window: Maximum lag for sync calculation
         n_clusters: Number of clusters
-        
+
     Returns:
         clusters: Cluster assignments
         mat: Synchronization matrix
@@ -882,12 +886,12 @@ def build_sync_network(event_series_dict: Dict[str, np.ndarray],
                       sync_threshold: float = SYNC_THRESHOLD_DEFAULT) -> nx.DiGraph:
     """
     Build directed synchronization network from event series.
-    
+
     Args:
         event_series_dict: Dictionary of event series
         lag_window: Maximum lag to consider
         sync_threshold: Minimum sync rate for edge creation
-        
+
     Returns:
         G: Directed graph with sync relationships
     """
@@ -933,7 +937,7 @@ def build_sync_network(event_series_dict: Dict[str, np.ndarray],
 def plot_posterior(trace, var_names: Optional[List[str]] = None, hdi_prob: float = 0.94):
     """
     Visualize posterior distributions from Bayesian analysis.
-    
+
     Args:
         trace: PyMC InferenceData object
         var_names: Variables to plot
@@ -956,7 +960,7 @@ def plot_l3_prediction_dual(
 ):
     """
     Plot observed data, model predictions, and detected events for multiple series.
-    
+
     Args:
         data_dict: Original time series data
         mu_pred_dict: Model predictions
@@ -1026,7 +1030,7 @@ def plot_l3_prediction_dual(
 def plot_sync_profile(sync_profile: Dict[int, float], title: str = "Sync Profile (σₛ vs Lag)"):
     """
     Plot synchronization profile showing sync rate vs lag.
-    
+
     Args:
         sync_profile: Dictionary of sync rates by lag
         title: Plot title
@@ -1043,7 +1047,7 @@ def plot_sync_profile(sync_profile: Dict[int, float], title: str = "Sync Profile
 def plot_dynamic_sync(time_points, sync_rates, optimal_lags):
     """
     Plot time-varying synchronization rate and optimal lag.
-    
+
     Args:
         time_points: Time indices
         sync_rates: Synchronization rates over time
@@ -1077,7 +1081,7 @@ def plot_multi_causality_lags(
 ):
     """
     Plot multiple lagged causality profiles together.
-    
+
     Args:
         causality_dicts: List of causality dictionaries
         labels: Labels for each profile
@@ -1111,7 +1115,7 @@ def plot_multi_causality_lags(
 def plot_sync_network(G: nx.DiGraph):
     """
     Plot synchronization network graph.
-    
+
     Args:
         G: NetworkX directed graph
     """
@@ -1137,14 +1141,14 @@ def load_csv_data(filepath: str,
                   parse_dates: bool = True) -> Dict[str, np.ndarray]:
     """
     Load time series data from CSV file.
-    
+
     Args:
         filepath: Path to CSV file
         time_column: Column name for time/date
         value_columns: Columns to analyze
         delimiter: CSV delimiter
         parse_dates: Whether to parse date columns
-        
+
     Returns:
         Dictionary mapping column names to numpy arrays
     """
@@ -1186,7 +1190,7 @@ def load_csv_data(filepath: str,
             print(f"Warning: Column '{col}' not found in CSV")
 
     return series_dict
-  
+
 
 def load_multiple_csv_files(filepaths: List[str],
                            series_names: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
@@ -1221,10 +1225,10 @@ def load_multiple_csv_files(filepaths: List[str],
 def validate_series_lengths(series_dict: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     """
     Validate and align series lengths to ensure compatibility.
-    
+
     Args:
         series_dict: Dictionary of time series
-        
+
     Returns:
         Aligned series dictionary
     """
@@ -1268,7 +1272,7 @@ def main_csv_analysis(
         config: L3Config instance (uses default if None)
         analyze_all_pairs: Whether to analyze all pairs (default: True)
         max_pairs: Maximum number of pairs to analyze (None = all)
-        
+
     Returns:
         features_dict: Extracted Lambda³ features
         sync_mat: Synchronization matrix
@@ -1433,14 +1437,14 @@ def analyze_series_pair(
 ) -> Tuple[float, float]:
     """
     Detailed analysis of a pair of series including cross-interactions.
-    
+
     Args:
         name_a: First series name
         name_b: Second series name
         features_dict: Pre-computed Lambda³ features
         config: Analysis configuration
         show_all_plots: Whether to show all plots
-        
+
     Returns:
         Tuple of (beta_B_on_A, beta_A_on_B) interaction coefficients
     """
@@ -1539,7 +1543,7 @@ def analyze_series_pair(
         print(f"\nPosterior for {name_a} (with {name_b} interaction):")
         plot_posterior(
             trace_a,
-            var_names=['beta_time', 'beta_dLC_pos', 'beta_dLC_neg', 'beta_rhoT', 
+            var_names=['beta_time', 'beta_dLC_pos', 'beta_dLC_neg', 'beta_rhoT',
                       'beta_interact_pos', 'beta_interact_neg', 'beta_interact_stress'],
             hdi_prob=config.hdi_prob
         )
@@ -1547,7 +1551,7 @@ def analyze_series_pair(
         print(f"\nPosterior for {name_b} (with {name_a} interaction):")
         plot_posterior(
             trace_b,
-            var_names=['beta_time', 'beta_dLC_pos', 'beta_dLC_neg', 'beta_rhoT', 
+            var_names=['beta_time', 'beta_dLC_pos', 'beta_dLC_neg', 'beta_rhoT',
                       'beta_interact_pos', 'beta_interact_neg', 'beta_interact_stress'],
             hdi_prob=config.hdi_prob
         )
@@ -1603,24 +1607,24 @@ def analyze_series_pair(
 # ===============================
 # Additional Plotting Functions
 # ===============================
-def plot_clustered_series(series_dict: Dict[str, np.ndarray], 
+def plot_clustered_series(series_dict: Dict[str, np.ndarray],
                          clusters: Dict[str, int]):
     """
     Plot time series colored by cluster membership.
-    
+
     Args:
         series_dict: Dictionary of time series
         clusters: Cluster assignments for each series
     """
     n_clusters = len(set(clusters.values()))
     colors = plt.cm.Set1(np.linspace(0, 1, n_clusters))
-    
+
     plt.figure(figsize=(12, 6))
     for name, data in series_dict.items():
         cluster = clusters[name]
-        plt.plot(data, label=f"{name} (Cluster {cluster})", 
+        plt.plot(data, label=f"{name} (Cluster {cluster})",
                 color=colors[cluster], alpha=0.7, linewidth=1.5)
-    
+
     plt.xlabel("Time Step")
     plt.ylabel("Value")
     plt.title("Time Series Grouped by Synchronization Clusters")
@@ -1634,7 +1638,7 @@ def plot_interaction_summary(interaction_effects: Dict[Tuple[str, str], float],
                            series_names: List[str]):
     """
     Plot summary of all interaction effects as a heatmap.
-    
+
     Args:
         interaction_effects: Dictionary of pairwise interaction coefficients
         series_names: List of series names
@@ -1669,7 +1673,7 @@ def create_analysis_summary(series_names: List[str],
                           features_dict: Dict[str, Dict[str, np.ndarray]]):
     """
     Create a summary report of the analysis.
-    
+
     Args:
         series_names: List of analyzed series
         sync_mat: Synchronization matrix
