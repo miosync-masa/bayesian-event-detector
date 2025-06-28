@@ -1754,6 +1754,87 @@ def create_comprehensive_summary(series_dict: Dict[str, jnp.ndarray],
 # ===============================
 # 同期計算の修正版関数
 # ===============================
+# 1. 動的同期解析
+def calculate_dynamic_sync_numpyro(series_a: jnp.ndarray, series_b: jnp.ndarray, 
+                                  window: int = 20, lag_window: int = 10):
+    """時変同期率の計算"""
+    T = len(series_a)
+    sync_rates = []
+    optimal_lags = []
+    
+    for t in range(T - window + 1):
+        # ウィンドウ内での同期計算
+        _, sync_values = sync_profile_jax(
+            series_a[t:t+window], 
+            series_b[t:t+window], 
+            lag_window
+        )
+        max_idx = jnp.argmax(sync_values)
+        sync_rates.append(sync_values[max_idx])
+        optimal_lags.append(max_idx - lag_window)
+    
+    return jnp.arange(window//2, T - window//2 + 1), jnp.array(sync_rates), jnp.array(optimal_lags)
+
+# 2. 条件付き同期
+def lambda3_conditional_sync_numpyro(series_a: jnp.ndarray, series_b: jnp.ndarray,
+                                    condition_series: jnp.ndarray, 
+                                    condition_threshold: float) -> float:
+    """条件付き同期率計算"""
+    mask = condition_series > condition_threshold
+    if jnp.sum(mask) > 0:
+        return jnp.mean(series_a[mask] * series_b[mask])
+    return 0.0
+
+# 3. レジーム検出（NumPyro版）
+class Lambda3RegimeDetectorNumPyro:
+    def __init__(self, n_regimes: int = 3):
+        self.n_regimes = n_regimes
+        self.regime_labels = None
+        
+    def fit(self, features_dict: Dict[str, jnp.ndarray]):
+        # KMeansをJAX/NumPyro互換の実装に
+        from sklearn.cluster import KMeans
+        
+        X = np.column_stack([
+            np.array(features_dict['delta_lambda_pos']),
+            np.array(features_dict['delta_lambda_neg']),
+            np.array(features_dict['rho_t'])
+        ])
+        
+        kmeans = KMeans(n_clusters=self.n_regimes, random_state=42)
+        self.regime_labels = kmeans.fit_predict(X)
+        
+        return self.regime_labels
+
+# 4. 拡張因果関係解析
+class Lambda3BayesianExtendedNumPyro:
+    def __init__(self, config: L3ConfigNumPyro):
+        self.config = config
+        self.event_memory = []
+        
+    def detect_time_dependent_causality(self, features: Dict[str, jnp.ndarray], 
+                                      lag_window: int = 10) -> Dict[int, float]:
+        """時間依存因果関係の検出"""
+        pos_events = np.array(features['delta_lambda_pos'])
+        neg_events = np.array(features['delta_lambda_neg'])
+        
+        causality_by_lag = {}
+        T = len(pos_events)
+        
+        for lag in range(1, min(lag_window + 1, T)):
+            count_pairs = 0
+            count_pos = 0
+            
+            for i in range(T - lag):
+                if pos_events[i] > 0:
+                    count_pos += 1
+                    if neg_events[i + lag] > 0:
+                        count_pairs += 1
+            
+            causality_by_lag[lag] = count_pairs / max(count_pos, 1)
+            
+        return causality_by_lag
+
 
 def validate_event_series(event_series_dict: Dict[str, jnp.ndarray]):
     """イベント系列の検証とデバッグ情報出力"""
