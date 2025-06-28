@@ -1964,7 +1964,8 @@ def synchronization_analysis_section(series_names, features_dict):
         print(f"Synchronization analysis failed: {e}")
         import traceback
         traceback.print_exc()
-        return None, series_names    
+        # エラー時もnamesを返す
+        return None, series_names  
 
 # ===============================
 # Main Analysis Pipeline
@@ -2322,7 +2323,7 @@ def main_lambda3_numpyro_analysis(csv_path: str = None,
             print(f"🔧 Fixed {problematic_count} problematic series through scaling")
     
     # トップ同期ペア
-    if sync_matrix is not None:
+    if sync_matrix is not None and names is not None:  # namesの存在を確認
         print("\nTop synchronization pairs:")
         n = len(names)
         sync_pairs = []
@@ -2342,7 +2343,7 @@ def main_lambda3_numpyro_analysis(csv_path: str = None,
         'features_dict': features_dict,
         'inference_results': inference_results,
         'sync_matrix': sync_matrix,
-        'series_names': names,
+        'series_names': names,  # namesを使用
         'scaling_info': scaling_info
     }
     
@@ -2465,83 +2466,90 @@ def plot_sync_network_pymc_style(G: nx.DiGraph):
     plt.title("Synchronization (σₛ) Network")
     plt.show()
 
-
-
-# 修正版のcomprehensive_sync_analysis_pymc_style関数（返り値を修正）
 def comprehensive_sync_analysis_pymc_style(series_names: List[str], 
                                           features_dict: Dict[str, Dict[str, np.ndarray]]):
     """PyMCスタイルの包括的同期解析セクション"""
     
-    # Multi-series synchronization analysis
-    print("\n" + "="*50)
-    print("MULTI-SERIES SYNCHRONIZATION ANALYSIS")
-    print("="*50)
+    try:
+        # Multi-series synchronization analysis
+        print("\n" + "="*50)
+        print("MULTI-SERIES SYNCHRONIZATION ANALYSIS")
+        print("="*50)
 
-    # Build event series dictionary
-    event_series_dict = {
-        name: np.array(features_dict[name]['delta_lambda_pos'], dtype=np.float64)
-        for name in series_names
-    }
+        # Build event series dictionary
+        event_series_dict = {
+            name: np.array(features_dict[name]['delta_lambda_pos'], dtype=np.float64)
+            for name in series_names
+        }
 
-    # Synchronization matrix (PyMC版のsync_matrix_simple関数を使用)
-    sync_mat, names = sync_matrix_simple(event_series_dict, lag_window=10)
+        # Synchronization matrix (PyMC版のsync_matrix_simple関数を使用)
+        sync_mat, names = sync_matrix_simple(event_series_dict, lag_window=10)
 
-    # Plot sync matrix heatmap（PyMCと同じ）
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(sync_mat, annot=True, fmt='.3f',
-                xticklabels=names,
-                yticklabels=names,
-                cmap="Blues", vmin=0, vmax=1,
-                square=True, cbar_kws={'label': 'Sync Rate σₛ'})
-    plt.title("Synchronization Rate Matrix (σₛ)", fontsize=16)
-    plt.tight_layout()
-    plt.show()
+        # Plot sync matrix heatmap（PyMCと同じ）
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(sync_mat, annot=True, fmt='.3f',
+                    xticklabels=names,
+                    yticklabels=names,
+                    cmap="Blues", vmin=0, vmax=1,
+                    square=True, cbar_kws={'label': 'Sync Rate σₛ'})
+        plt.title("Synchronization Rate Matrix (σₛ)", fontsize=16)
+        plt.tight_layout()
+        plt.show()
 
-    # Build and plot sync network
-    print("\n=== Building Synchronization Network ===")
+        # Build and plot sync network
+        print("\n=== Building Synchronization Network ===")
 
-    # Find appropriate threshold（PyMCと同じロジック）
-    non_diag_values = []
-    n = len(names)
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                non_diag_values.append(sync_mat[i, j])
+        # Find appropriate threshold（PyMCと同じロジック）
+        non_diag_values = []
+        n = len(names)
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    non_diag_values.append(sync_mat[i, j])
 
-    G = None  # デフォルトはNone
-    if non_diag_values:
-        threshold = np.percentile(non_diag_values, 25)  # Use 25th percentile
-        print(f"Using threshold: {threshold:.4f}")
+        G = None  # デフォルトはNone
+        if non_diag_values:
+            threshold = np.percentile(non_diag_values, 25)  # Use 25th percentile
+            print(f"Using threshold: {threshold:.4f}")
 
-        G = build_sync_network_pymc_style(event_series_dict, lag_window=10, sync_threshold=threshold)
-        if G.number_of_edges() > 0:
-            plt.figure(figsize=(12, 10))
-            plot_sync_network_pymc_style(G)
+            G = build_sync_network_pymc_style(event_series_dict, lag_window=10, sync_threshold=threshold)
+            if G.number_of_edges() > 0:
+                plt.figure(figsize=(12, 10))
+                plot_sync_network_pymc_style(G)
 
-    # Clustering analysis（PyMCと同じ）
-    if len(series_names) > 2:
-        print("\n=== Clustering Analysis ===")
-        n_clusters = min(3, len(series_names) // 2)
-        clusters, _ = cluster_series_by_sync_simple(event_series_dict, lag_window=10, n_clusters=n_clusters)
-        print(f"Clusters: {clusters}")
+        # Clustering analysis（PyMCと同じ）
+        if len(series_names) > 2:
+            print("\n=== Clustering Analysis ===")
+            n_clusters = min(3, len(series_names) // 2)
+            clusters, _ = cluster_series_by_sync_simple(event_series_dict, lag_window=10, n_clusters=n_clusters)
+            print(f"Clusters: {clusters}")
 
-        # Plot clustered series - データ辞書を作成
-        series_data_dict = {}
-        for name in series_names:
-            # features_dictから元のデータを取得（dataキーがある場合）
-            if 'data' in features_dict[name]:
-                series_data_dict[name] = np.array(features_dict[name]['data'])
-            else:
-                # dataキーがない場合は、最初の利用可能な系列を使用
-                for key in ['delta_lambda_pos', 'delta_lambda_neg', 'rho_t']:
-                    if key in features_dict[name]:
-                        series_data_dict[name] = np.array(features_dict[name][key])
-                        break
+            # Plot clustered series - データ辞書を作成
+            series_data_dict = {}
+            for name in series_names:
+                # features_dictから元のデータを取得（dataキーがある場合）
+                if 'data' in features_dict[name]:
+                    series_data_dict[name] = np.array(features_dict[name]['data'])
+                else:
+                    # dataキーがない場合は、最初の利用可能な系列を使用
+                    for key in ['delta_lambda_pos', 'delta_lambda_neg', 'rho_t']:
+                        if key in features_dict[name]:
+                            series_data_dict[name] = np.array(features_dict[name][key])
+                            break
+            
+            if series_data_dict:
+                plot_clustered_series(series_data_dict, clusters)
+
+        return sync_mat, G if G is not None else nx.DiGraph()
         
-        if series_data_dict:
-            plot_clustered_series(series_data_dict, clusters)
-
-    return sync_mat, G
+    except Exception as e:
+        print(f"Comprehensive sync analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        # エラー時のデフォルト値を返す
+        n = len(series_names)
+        default_sync_mat = np.eye(n)  # 対角行列
+        return default_sync_mat, nx.DiGraph()
 
 # plot_clustered_series関数（元のPyMC版をそのまま使用）
 def plot_clustered_series(series_dict: Dict[str, np.ndarray],
