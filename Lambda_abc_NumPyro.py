@@ -57,8 +57,8 @@ class L3ConfigNumPyro:
     delta_percentile: float = 97.0
     local_jump_percentile: float = 97.0
     # ベイジアンサンプリングパラメータ
-    num_samples: int = 8000  # MCMCサンプル数
-    num_warmup: int = 8000   # ウォームアップ
+    num_samples: int = 2000  # MCMCサンプル数
+    num_warmup: int = 1000   # ウォームアップ
     num_chains: int = 4      # MCMCチェーン数
     target_accept_prob: float = 0.95
     max_tree_depth: int = 10
@@ -446,198 +446,6 @@ class Lambda3NumPyroInference:
                     results.append(None)
         
         return results
-
-# ===============================
-# Synchronization Analysis (Original PyMC Style)
-# ===============================
-
-def calculate_sync_profile_simple(series_a: np.ndarray, series_b: np.ndarray,
-                                 lag_window: int = 10) -> Tuple[Dict[int, float], float, int]:
-    """シンプルな同期プロファイル計算（NumPy版）"""
-    
-    # NumPy配列に変換
-    series_a = np.asarray(series_a, dtype=np.float64)
-    series_b = np.asarray(series_b, dtype=np.float64)
-    
-    sync_profile = {}
-    max_sync = 0.0
-    optimal_lag = 0
-    
-    for lag in range(-lag_window, lag_window + 1):
-        if lag < 0:
-            # 負のラグ: series_a が series_b より先行
-            abs_lag = -lag
-            if abs_lag < len(series_a):
-                sync_rate = np.mean(series_a[abs_lag:] * series_b[:-abs_lag])
-            else:
-                sync_rate = 0.0
-        elif lag > 0:
-            # 正のラグ: series_b が series_a より先行
-            if lag < len(series_b):
-                sync_rate = np.mean(series_a[:-lag] * series_b[lag:])
-            else:
-                sync_rate = 0.0
-        else:
-            # ラグ0: 同期
-            sync_rate = np.mean(series_a * series_b)
-        
-        sync_profile[lag] = sync_rate
-        
-        if sync_rate > max_sync:
-            max_sync = sync_rate
-            optimal_lag = lag
-    
-    return sync_profile, max_sync, optimal_lag
-
-def calculate_sync_rate_simple(series_a_events: np.ndarray, series_b_events: np.ndarray, 
-                              lag_window: int = 10) -> Tuple[float, int]:
-    """シンプルな同期率計算（元PyMCスタイル）"""
-    
-    max_sync, optimal_lag = 0.0, 0
-    
-    for lag in range(-lag_window, lag_window + 1):
-        if lag < 0:
-            # 負のラグ
-            abs_lag = -lag
-            if abs_lag < len(series_a_events):
-                sync = np.mean(series_a_events[abs_lag:] * series_b_events[:-abs_lag])
-            else:
-                sync = 0.0
-        elif lag > 0:
-            # 正のラグ
-            if lag < len(series_b_events):
-                sync = np.mean(series_a_events[:-lag] * series_b_events[lag:])
-            else:
-                sync = 0.0
-        else:
-            # ラグ0
-            sync = np.mean(series_a_events * series_b_events)
-
-        if sync > max_sync:
-            max_sync, optimal_lag = sync, lag
-
-    return max_sync, optimal_lag
-
-def sync_matrix_simple(event_series_dict: Dict[str, np.ndarray], 
-                      lag_window: int = 10) -> Tuple[np.ndarray, List[str]]:
-    """シンプルな同期行列作成（元PyMCスタイル）"""
-    
-    series_names = list(event_series_dict.keys())
-    n = len(series_names)
-    mat = np.zeros((n, n))
-
-    print(f"Building sync matrix for {n} series (NumPy version)...")
-
-    for i, name_a in enumerate(series_names):
-        for j, name_b in enumerate(series_names):
-            if i == j:
-                mat[i, j] = 1.0  # 自己同期は完璧
-                continue
-
-            try:
-                # NumPy配列として取得
-                series_a = np.asarray(event_series_dict[name_a], dtype=np.float64)
-                series_b = np.asarray(event_series_dict[name_b], dtype=np.float64)
-                
-                # シンプル同期計算
-                max_sync, optimal_lag = calculate_sync_rate_simple(series_a, series_b, lag_window)
-                mat[i, j] = max_sync
-                
-                print(f"  {name_a} → {name_b}: {max_sync:.4f} (lag: {optimal_lag})")
-                
-            except Exception as e:
-                print(f"  {name_a} → {name_b}: calculation failed ({e}), using correlation fallback")
-                # フォールバック：相関係数
-                try:
-                    series_a = np.asarray(event_series_dict[name_a], dtype=np.float64)
-                    series_b = np.asarray(event_series_dict[name_b], dtype=np.float64)
-                    correlation = np.corrcoef(series_a, series_b)[0, 1]
-                    if np.isnan(correlation):
-                        correlation = 0.0
-                    mat[i, j] = abs(correlation)
-                    print(f"    Using correlation: {abs(correlation):.4f}")
-                except:
-                    mat[i, j] = 0.0
-                    print(f"    Set to 0.0")
-
-    return mat, series_names
-
-def build_sync_network_simple(event_series_dict: Dict[str, np.ndarray],
-                             lag_window: int = 10,
-                             sync_threshold: float = 0.3) -> nx.DiGraph:
-    """シンプル同期ネットワーク構築（元PyMCスタイル）"""
-    
-    series_names = list(event_series_dict.keys())
-    G = nx.DiGraph()
-
-    # ノード追加
-    for series in series_names:
-        G.add_node(series)
-
-    print(f"\nBuilding sync network with threshold={sync_threshold}")
-
-    # エッジ追加
-    edge_count = 0
-    for name_a in series_names:
-        for name_b in series_names:
-            if name_a == name_b:
-                continue
-
-            try:
-                series_a = np.asarray(event_series_dict[name_a], dtype=np.float64)
-                series_b = np.asarray(event_series_dict[name_b], dtype=np.float64)
-                
-                sync_profile, max_sync, optimal_lag = calculate_sync_profile_simple(
-                    series_a, series_b, lag_window
-                )
-
-                print(f"{name_a} → {name_b}: max_sync={max_sync:.4f}, lag={optimal_lag}")
-
-                if max_sync >= sync_threshold:
-                    G.add_edge(name_a, name_b,
-                              weight=max_sync,
-                              lag=optimal_lag,
-                              profile=sync_profile)
-                    edge_count += 1
-                    print(f"  ✓ Edge added!")
-                    
-            except Exception as e:
-                print(f"{name_a} → {name_b}: failed ({e})")
-
-    print(f"\nNetwork summary: {G.number_of_nodes()} nodes, {edge_count} edges")
-    return G
-
-def calculate_dynamic_sync_simple(series_a_events: np.ndarray, series_b_events: np.ndarray, 
-                                 window: int = 20, lag_window: int = 10) -> Tuple[np.ndarray, List[float], List[int]]:
-    """動的同期計算（元PyMCスタイル）"""
-    
-    T = len(series_a_events)
-    sync_rates, optimal_lags = [], []
-
-    for t in range(T - window + 1):
-        sync, lag = calculate_sync_rate_simple(
-            series_a_events[t:t+window],
-            series_b_events[t:t+window],
-            lag_window
-        )
-        sync_rates.append(sync)
-        optimal_lags.append(lag)
-
-    time_points = np.arange(window//2, T - window//2 + 1)
-    return time_points, sync_rates, optimal_lags
-
-def cluster_series_by_sync_simple(event_series_dict: Dict[str, np.ndarray], 
-                                 lag_window: int = 10, n_clusters: int = 2) -> Tuple[Dict[str, int], np.ndarray]:
-    """同期ベースクラスタリング（元PyMCスタイル）"""
-    
-    mat, names = sync_matrix_simple(event_series_dict, lag_window)
-    
-    from sklearn.cluster import AgglomerativeClustering
-    clustering = AgglomerativeClustering(n_clusters=n_clusters, metric='precomputed', linkage='average')
-    labels = clustering.fit_predict(1 - mat)  # 1-syncを距離として使用
-    
-    clusters = {name: int(label) for name, label in zip(names, labels)}
-    return clusters, mat
 
 # ===============================
 # Data Preprocessing & Scaling
@@ -2271,6 +2079,7 @@ def comprehensive_lambda3_analysis(csv_path: str = None,
         'sync_network': sync_network,
         'scaling_info': scaling_info
     }
+
 def main_lambda3_numpyro_analysis(csv_path: str = None, 
                                  config: L3ConfigNumPyro = None,
                                  series_columns: Optional[List[str]] = None,
@@ -2429,29 +2238,32 @@ def main_lambda3_numpyro_analysis(csv_path: str = None,
         except Exception as e:
             print(f"  Interaction model failed: {e}")
     
-    # 5. 同期解析（JAX最適化）
+    # 5. 同期解析（PyMCスタイル）
     print("\nSynchronization analysis...")
     try:
+        # イベント系列の準備
         event_series_dict = {
-            name: features_dict[name]['delta_lambda_pos']
+            name: np.array(features_dict[name]['delta_lambda_pos'], dtype=np.float64)
             for name in series_names
         }
         
         # イベント系列の検証
         validate_event_series(event_series_dict)
         
-        # 修正版の関数を使用
-        sync_matrix, names = build_sync_matrix_jax_fixed(event_series_dict, lag_window=10)
-        print(f"Synchronization matrix computed successfully")
+        # PyMCスタイルの包括的同期解析を実行
+        sync_matrix, sync_network = comprehensive_sync_analysis_pymc_style(series_names, features_dict)
+        print(f"\nSynchronization analysis completed successfully")
         
-        # 可視化（修正版を使用）
-        plot_sync_matrix_numpyro_fixed(sync_matrix, names)
+        # sync_networkがNoneの場合の処理
+        if sync_network is None:
+            sync_network = nx.DiGraph()  # 空のネットワーク
         
     except Exception as e:
         print(f"Synchronization analysis failed: {e}")
         import traceback
         traceback.print_exc()
         sync_matrix = None
+        sync_network = None
         names = list(series_dict.keys())
     
     # 6. 可視化
@@ -2589,6 +2401,174 @@ def main_lambda3_numpyro_analysis(csv_path: str = None,
 # ===============================
 # PyMC互換レポート関数
 # ===============================
+# Lambda_abc_NumPyro.py に追加する関数
+# PyMCと完全に同じ出力を実現する同期ネットワーク関数
+
+def build_sync_network_pymc_style(event_series_dict: Dict[str, np.ndarray],
+                                 lag_window: int = 10,
+                                 sync_threshold: float = 0.3) -> nx.DiGraph:
+    """PyMCスタイルの同期ネットワーク構築（元のprint出力を完全再現）"""
+    
+    series_names = list(event_series_dict.keys())
+    G = nx.DiGraph()
+
+    # ノード追加
+    for series in series_names:
+        G.add_node(series)
+
+    print(f"\nBuilding sync network with threshold={sync_threshold}")
+
+    # エッジ追加
+    edge_count = 0
+    for name_a in series_names:
+        for name_b in series_names:
+            if name_a == name_b:
+                continue
+
+            try:
+                series_a = np.asarray(event_series_dict[name_a], dtype=np.float64)
+                series_b = np.asarray(event_series_dict[name_b], dtype=np.float64)
+                
+                sync_profile, max_sync, optimal_lag = calculate_sync_profile_simple(
+                    series_a, series_b, lag_window
+                )
+
+                print(f"{name_a} → {name_b}: max_sync={max_sync:.4f}, lag={optimal_lag}")
+
+                if max_sync >= sync_threshold:
+                    G.add_edge(name_a, name_b,
+                              weight=max_sync,
+                              lag=optimal_lag,
+                              profile=sync_profile)
+                    edge_count += 1
+                    print(f"  ✓ Edge added!")
+                    
+            except Exception as e:
+                print(f"{name_a} → {name_b}: failed ({e})")
+
+    print(f"\nNetwork summary: {G.number_of_nodes()} nodes, {edge_count} edges")
+    return G
+
+
+def plot_sync_network_pymc_style(G: nx.DiGraph):
+    """PyMCスタイルの同期ネットワークグラフ描画"""
+    pos = nx.spring_layout(G)
+    edge_labels = {
+        (u, v): f"σₛ:{d['weight']:.2f},lag:{d['lag']}"
+        for u, v, d in G.edges(data=True)
+    }
+
+    plt.figure(figsize=(12, 10))
+    nx.draw(G, pos, with_labels=True, node_color='skyblue',
+            node_size=1500, font_size=10, arrowsize=20)
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
+    plt.title("Synchronization (σₛ) Network")
+    plt.show()
+
+
+
+# 修正版のcomprehensive_sync_analysis_pymc_style関数（返り値を修正）
+def comprehensive_sync_analysis_pymc_style(series_names: List[str], 
+                                          features_dict: Dict[str, Dict[str, np.ndarray]]):
+    """PyMCスタイルの包括的同期解析セクション"""
+    
+    # Multi-series synchronization analysis
+    print("\n" + "="*50)
+    print("MULTI-SERIES SYNCHRONIZATION ANALYSIS")
+    print("="*50)
+
+    # Build event series dictionary
+    event_series_dict = {
+        name: np.array(features_dict[name]['delta_lambda_pos'], dtype=np.float64)
+        for name in series_names
+    }
+
+    # Synchronization matrix (PyMC版のsync_matrix_simple関数を使用)
+    sync_mat, names = sync_matrix_simple(event_series_dict, lag_window=10)
+
+    # Plot sync matrix heatmap（PyMCと同じ）
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(sync_mat, annot=True, fmt='.3f',
+                xticklabels=names,
+                yticklabels=names,
+                cmap="Blues", vmin=0, vmax=1,
+                square=True, cbar_kws={'label': 'Sync Rate σₛ'})
+    plt.title("Synchronization Rate Matrix (σₛ)", fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+    # Build and plot sync network
+    print("\n=== Building Synchronization Network ===")
+
+    # Find appropriate threshold（PyMCと同じロジック）
+    non_diag_values = []
+    n = len(names)
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                non_diag_values.append(sync_mat[i, j])
+
+    G = None  # デフォルトはNone
+    if non_diag_values:
+        threshold = np.percentile(non_diag_values, 25)  # Use 25th percentile
+        print(f"Using threshold: {threshold:.4f}")
+
+        G = build_sync_network_pymc_style(event_series_dict, lag_window=10, sync_threshold=threshold)
+        if G.number_of_edges() > 0:
+            plt.figure(figsize=(12, 10))
+            plot_sync_network_pymc_style(G)
+
+    # Clustering analysis（PyMCと同じ）
+    if len(series_names) > 2:
+        print("\n=== Clustering Analysis ===")
+        n_clusters = min(3, len(series_names) // 2)
+        clusters, _ = cluster_series_by_sync_simple(event_series_dict, lag_window=10, n_clusters=n_clusters)
+        print(f"Clusters: {clusters}")
+
+        # Plot clustered series - データ辞書を作成
+        series_data_dict = {}
+        for name in series_names:
+            # features_dictから元のデータを取得（dataキーがある場合）
+            if 'data' in features_dict[name]:
+                series_data_dict[name] = np.array(features_dict[name]['data'])
+            else:
+                # dataキーがない場合は、最初の利用可能な系列を使用
+                for key in ['delta_lambda_pos', 'delta_lambda_neg', 'rho_t']:
+                    if key in features_dict[name]:
+                        series_data_dict[name] = np.array(features_dict[name][key])
+                        break
+        
+        if series_data_dict:
+            plot_clustered_series(series_data_dict, clusters)
+
+    return sync_mat, G
+
+# plot_clustered_series関数（元のPyMC版をそのまま使用）
+def plot_clustered_series(series_dict: Dict[str, np.ndarray],
+                         clusters: Dict[str, int]):
+    """
+    Plot time series colored by cluster membership.
+
+    Args:
+        series_dict: Dictionary of time series
+        clusters: Cluster assignments for each series
+    """
+    n_clusters = len(set(clusters.values()))
+    colors = plt.cm.Set1(np.linspace(0, 1, n_clusters))
+
+    plt.figure(figsize=(12, 6))
+    for name, data in series_dict.items():
+        cluster = clusters[name]
+        plt.plot(data, label=f"{name} (Cluster {cluster})",
+                color=colors[cluster], alpha=0.7, linewidth=1.5)
+
+    plt.xlabel("Time Step")
+    plt.ylabel("Value")
+    plt.title("Time Series Grouped by Synchronization Clusters")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
 def create_comprehensive_report_numpyro(results: Dict[str, Any]):
     """
@@ -2893,131 +2873,6 @@ def generate_pymc_compatible_output(analysis_results: Dict[str, Any]):
                     max_lag = max(profile.items(), key=lambda x: x[1])
                     print(f"  {direction}: Peak at lag {max_lag[0]} (p={max_lag[1]:.3f})")
 
-
-# 既存の comprehensive_lambda3_analysis 関数を修正して統合
-def comprehensive_lambda3_analysis_with_pymc_report(csv_path: str = None,
-                                                   series_columns: Optional[List[str]] = None,
-                                                   run_diagnostics: bool = True,
-                                                   run_all_pairs: bool = True,
-                                                   max_pairs: int = None) -> Dict[str, Any]:
-    """
-    PyMCスタイルの包括的Lambda³解析（レポート機能統合版）
-    """
-    # Note: この関数は既存のLambda_abc_NumPyro.pyファイル内に追加して使用してください
-    # 以下のコードは参考実装です
-    
-    print("⚠️ この関数はLambda_abc_NumPyro.py内に統合して使用してください")
-    print("代わりにcreate_comprehensive_report_numpyro関数を既存コードで使用してください")
-    return None
-    
-    config = L3ConfigNumPyro(
-        num_samples=1000,
-        num_warmup=500,
-        num_chains=2,
-        target_accept_prob=0.8
-    )
-    
-    print("🚀 COMPREHENSIVE LAMBDA³ ANALYSIS (PyMC Compatible)")
-    print("=" * 60)
-    
-    # データ読み込みとスケーリング
-    if csv_path is None:
-        print("Fetching financial data...")
-        data_df = fetch_financial_data_numpyro()
-        if data_df is None:
-            return None
-        csv_path = "financial_data_numpyro.csv"
-    
-    series_dict = load_csv_to_jax(csv_path, series_columns)
-    
-    # スケーリング
-    if len(series_dict) > 0:
-        scaling_method = recommend_scaling_method(series_dict)
-        series_dict, scaling_info = preprocess_series_dict(
-            series_dict, 
-            scaling_method=scaling_method,
-            verbose=True
-        )
-    
-    # 特徴抽出
-    print("\nExtracting Lambda³ features...")
-    features_dict = {}
-    for name, data in series_dict.items():
-        features = extract_lambda3_features_jax(data, config)
-        features_dict[name] = features
-        
-        # PyMCスタイルの統計表示
-        n_pos = int(jnp.sum(features['delta_lambda_pos']))
-        n_neg = int(jnp.sum(features['delta_lambda_neg']))
-        avg_rho = float(jnp.mean(features['rho_t']))
-        print(f"  {name:15s} | Pos: {n_pos:3d} | Neg: {n_neg:3d} | ρT: {avg_rho:.3f}")
-    
-    # 高度解析
-    analyzer = Lambda3AdvancedAnalyzer(config)
-    
-    # ペア解析
-    if run_all_pairs and len(series_dict) >= 2:
-        print(f"\nRunning comprehensive pair analysis...")
-        pair_results = analyzer.analyze_all_pairs(
-            series_dict, features_dict, max_pairs=max_pairs
-        )
-    else:
-        pair_results = {}
-    
-    # その他の解析
-    regime_results = analyzer.detect_market_regimes(features_dict)
-    first_series = list(series_dict.keys())[0]
-    scale_breaks = analyzer.detect_scale_breaks(series_dict[first_series])
-    
-    # 条件付き同期
-    if len(features_dict) >= 2:
-        series_names = list(features_dict.keys())
-        conditional_sync = analyzer.calculate_conditional_sync(
-            features_dict[series_names[0]], 
-            features_dict[series_names[1]]
-        )
-    else:
-        conditional_sync = 0.0
-    
-    # 同期ネットワーク
-    if 'sync_profiles' in pair_results:
-        sync_network = build_sync_network_advanced(
-            pair_results['sync_profiles'], 
-            threshold=0.0
-        )
-    else:
-        sync_network = None
-    
-    # 結果統合
-    analysis_results = {
-        'regime_results': regime_results,
-        'scale_breaks': scale_breaks,
-        'conditional_sync': conditional_sync,
-        **pair_results
-    }
-    
-    # PyMCスタイルサマリー作成
-    create_analysis_summary_pymc_style(
-        list(series_dict.keys()), 
-        None,  # sync_matrixは別途計算
-        features_dict
-    )
-    
-    # 包括的レポート生成
-    final_results = {
-        'series_dict': series_dict,
-        'features_dict': features_dict,
-        'analysis_results': analysis_results,
-        'sync_network': sync_network,
-        'scaling_info': scaling_info
-    }
-    
-    # PyMC互換レポート出力
-    create_comprehensive_report_numpyro(final_results)
-    generate_pymc_compatible_output(final_results)
-    
-    return final_results
-
 # ===============================
 # Quick Start Example
 # ===============================
@@ -3308,4 +3163,3 @@ if __name__ == "__main__":
         print("\nLambda³ NumPyro analysis completed successfully!")
     else:
         print("\nAnalysis failed. Check data and configuration.")
-        
