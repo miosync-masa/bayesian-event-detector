@@ -1394,6 +1394,103 @@ def predict_with_model(
     
     return np.asarray(mu)
 
+# SVI実装
+def fit_svi_lambda3_numpyro(features: Dict[str, jnp.ndarray],
+                           y_obs: jnp.ndarray,
+                           config: L3ConfigNumPyro,
+                           n_steps: int = 5000) -> Dict[str, Any]:
+    """SVI（変分推論）によるLambda³モデルフィッティング"""
+    from numpyro.infer import SVI, Trace_ELBO
+    from numpyro.infer.autoguide import AutoNormal
+    from numpyro.optim import Adam
+    
+    # ガイド（変分分布）
+    guide = AutoNormal(lambda3_base_model)
+    
+    # 最適化
+    optimizer = Adam(step_size=0.01)
+    svi = SVI(lambda3_base_model, guide, optimizer, loss=Trace_ELBO())
+    
+    # 実行
+    rng_key = random.PRNGKey(0)
+    svi_result = svi.run(rng_key, n_steps, features, y_obs)
+    
+    return {
+        'params': svi_result.params,
+        'losses': svi_result.losses,
+        'guide': guide
+    }
+
+# モデル比較（LOO/WAIC）
+def compare_models_numpyro(models_dict: Dict[str, Dict[str, Any]],
+                          features: Dict[str, jnp.ndarray],
+                          data: jnp.ndarray) -> Dict[str, Any]:
+    """NumPyro版モデル比較（LOO-CV/WAIC）"""
+    import arviz as az
+    
+    comparison_results = {}
+    
+    for model_name, result in models_dict.items():
+        # 対数尤度計算
+        log_lik = calculate_log_likelihood_numpyro(
+            result['samples'], features, data
+        )
+        
+        # ArviZ形式に変換
+        idata = az.from_dict(
+            posterior=result['samples'],
+            log_likelihood={'y': log_lik}
+        )
+        
+        # LOO計算
+        loo = az.loo(idata)
+        comparison_results[model_name] = {
+            'loo': loo,
+            'elpd_loo': float(loo.elpd_loo),
+            'p_loo': float(loo.p_loo)
+        }
+    
+    # モデル比較テーブル
+    if len(models_dict) > 1:
+        compare_df = az.compare(
+            {name: res['idata'] for name, res in comparison_results.items()}
+        )
+        comparison_results['comparison_table'] = compare_df
+    
+    return comparison_results
+
+# 統合インターフェースクラス
+class Lambda3BayesianInferenceNumPyro:
+    """NumPyro版統合ベイジアン推論エンジン"""
+    
+    def __init__(self, config: L3ConfigNumPyro):
+        self.config = config
+        self.results = {}
+        
+    def fit_all_models(self, features: Dict[str, jnp.ndarray],
+                      data: jnp.ndarray) -> Dict[str, Any]:
+        """全モデルタイプを自動フィッティング"""
+        
+        # 基本モデル
+        self.results['base'] = self.fit_model(
+            features, data, model_type='base'
+        )
+        
+        # 動的モデル
+        self.results['dynamic'] = self.fit_model(
+            features, data, model_type='dynamic'
+        )
+        
+        # SVI
+        self.results['svi'] = fit_svi_lambda3_numpyro(
+            features, data, self.config
+        )
+        
+        return self.results
+    
+    def compare_all_models(self) -> Dict[str, Any]:
+        """全モデルの比較"""
+        return compare_models_numpyro(self.results)
 
 # ===============================
 # Helper Functions
