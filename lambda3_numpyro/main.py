@@ -235,6 +235,121 @@ For more information, visit: https://github.com/lambda3/lambda3-numpyro
         help='Output image file'
     )
     
+    # Bayesian command
+    bayesian_parser = subparsers.add_parser(
+        'bayesian',
+        help='Run complete Bayesian analysis pipeline'
+    )
+    bayesian_parser.add_argument(
+        'input',
+        help='Features file (.pkl) or CSV file'
+    )
+    bayesian_parser.add_argument(
+        '--output', '-o',
+        default='./bayesian_results',
+        help='Output directory'
+    )
+    bayesian_parser.add_argument(
+        '--include-svi',
+        action='store_true',
+        help='Include Stochastic Variational Inference'
+    )
+    bayesian_parser.add_argument(
+        '--criterion',
+        choices=['loo', 'waic'],
+        default='loo',
+        help='Model comparison criterion'
+    )
+    
+    # Hierarchical command
+    hierarchical_parser = subparsers.add_parser(
+        'hierarchical',
+        help='Run hierarchical Bayesian analysis for multiple series'
+    )
+    hierarchical_parser.add_argument(
+        'input',
+        help='Features file (.pkl) with multiple series'
+    )
+    hierarchical_parser.add_argument(
+        '--output', '-o',
+        default='./hierarchical_results',
+        help='Output directory'
+    )
+    hierarchical_parser.add_argument(
+        '--group-ids',
+        nargs='+',
+        type=int,
+        help='Group IDs for each series'
+    )
+    
+    # Model-compare command
+    compare_parser = subparsers.add_parser(
+        'compare',
+        help='Compare different model types'
+    )
+    compare_parser.add_argument(
+        'input',
+        help='Features file (.pkl)'
+    )
+    compare_parser.add_argument(
+        '--models',
+        nargs='+',
+        choices=['base', 'dynamic', 'interaction'],
+        default=['base', 'dynamic'],
+        help='Models to compare'
+    )
+    compare_parser.add_argument(
+        '--output', '-o',
+        default='./comparison_results',
+        help='Output directory'
+    )
+    
+    # PPC command
+    ppc_parser = subparsers.add_parser(
+        'ppc',
+        help='Run posterior predictive checks'
+    )
+    ppc_parser.add_argument(
+        'results',
+        help='Bayesian results file (.pkl)'
+    )
+    ppc_parser.add_argument(
+        '--features',
+        required=True,
+        help='Features file (.pkl)'
+    )
+    ppc_parser.add_argument(
+        '--output', '-o',
+        help='Output plot file'
+    )
+    
+    # Change-point command
+    changepoint_parser = subparsers.add_parser(
+        'changepoints',
+        help='Detect structural change points'
+    )
+    changepoint_parser.add_argument(
+        'input',
+        help='CSV file or features file'
+    )
+    changepoint_parser.add_argument(
+        '--window-size',
+        type=int,
+        default=50,
+        help='Window size for detection'
+    )
+    changepoint_parser.add_argument(
+        '--threshold',
+        type=float,
+        default=2.0,
+        help='Threshold factor for detection'
+    )
+    changepoint_parser.add_argument(
+        '--plot',
+        action='store_true',
+        help='Plot detected change points'
+    )
+    
     # Cloud command
     cloud_parser = subparsers.add_parser(
         'cloud',
@@ -754,6 +869,281 @@ def cmd_cloud(args, config: L3Config):
     return 0
 
 
+def cmd_bayesian(args, config: L3Config):
+    """Execute complete Bayesian analysis pipeline."""
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load features
+    if input_path.suffix == '.pkl':
+        print(f"Loading features from {input_path}")
+        features = load_features(input_path, config.cloud)
+        if isinstance(features, dict):
+            # Take first series
+            features = next(iter(features.values()))
+    elif input_path.suffix == '.csv':
+        print(f"Loading data from {input_path}")
+        series_dict = load_csv_series(input_path)
+        # Extract features for first series
+        first_series = next(iter(series_dict.values()))
+        features = extract_lambda3_features(first_series, config)
+    else:
+        print(f"Error: Unknown input format {input_path.suffix}")
+        return 1
+    
+    # Run complete Bayesian analysis
+    from lambda3.bayes import run_complete_bayesian_analysis
+    
+    results = run_complete_bayesian_analysis(
+        features,
+        config=config,
+        include_svi=args.include_svi
+    )
+    
+    # Save results
+    results_file = output_dir / "bayesian_analysis_results.pkl"
+    import pickle
+    with open(results_file, 'wb') as f:
+        pickle.dump(results, f)
+    print(f"\nResults saved to {results_file}")
+    
+    # Save comparison table if available
+    if 'comparison' in results and 'comparison_table' in results['comparison']:
+        comparison_file = output_dir / "model_comparison.csv"
+        results['comparison']['comparison_table'].to_csv(comparison_file)
+        print(f"Model comparison saved to {comparison_file}")
+    
+    # Generate summary report
+    report_file = output_dir / "bayesian_report.txt"
+    with open(report_file, 'w') as f:
+        f.write("Lambda³ Bayesian Analysis Report\n")
+        f.write("="*50 + "\n\n")
+        f.write(f"Best model: {results['best_model']}\n\n")
+        
+        f.write("Bayesian p-values:\n")
+        for stat, p_val in results['ppc']['bayesian_p_values'].items():
+            f.write(f"  {stat}: {p_val:.3f}\n")
+        
+        f.write("\nModels analyzed:\n")
+        for model_name in results['models'].keys():
+            f.write(f"  - {model_name}\n")
+    
+    print(f"Report saved to {report_file}")
+    
+    return 0
+
+
+def cmd_hierarchical(args, config: L3Config):
+    """Execute hierarchical Bayesian analysis."""
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load features
+    print(f"Loading features from {input_path}")
+    features_dict = load_features(input_path, config.cloud)
+    
+    if not isinstance(features_dict, dict):
+        print("Error: Hierarchical analysis requires multiple series")
+        return 1
+    
+    # Convert to list
+    features_list = list(features_dict.values())
+    series_names = list(features_dict.keys())
+    
+    print(f"\nFound {len(features_list)} series: {', '.join(series_names)}")
+    
+    # Parse group IDs
+    group_ids = args.group_ids
+    if group_ids and len(group_ids) != len(features_list):
+        print(f"Error: Number of group IDs ({len(group_ids)}) must match number of series ({len(features_list)})")
+        return 1
+    
+    # Run hierarchical analysis
+    from lambda3.bayes import fit_hierarchical_model
+    
+    print("\nRunning hierarchical Bayesian analysis...")
+    results = fit_hierarchical_model(
+        features_list,
+        config=config,
+        group_ids=group_ids
+    )
+    
+    # Save results
+    results_file = output_dir / "hierarchical_results.pkl"
+    import pickle
+    with open(results_file, 'wb') as f:
+        pickle.dump(results, f)
+    print(f"\nResults saved to {results_file}")
+    
+    # Generate summary
+    if results.summary is not None:
+        summary_file = output_dir / "hierarchical_summary.csv"
+        results.summary.to_csv(summary_file)
+        print(f"Summary saved to {summary_file}")
+    
+    return 0
+
+
+def cmd_compare(args, config: L3Config):
+    """Execute model comparison."""
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load features
+    print(f"Loading features from {input_path}")
+    features = load_features(input_path, config.cloud)
+    if isinstance(features, dict):
+        features = next(iter(features.values()))
+    
+    # Create inference engine
+    from lambda3.bayes import Lambda3BayesianInference
+    
+    inference = Lambda3BayesianInference(config)
+    
+    # Fit requested models
+    for model_type in args.models:
+        print(f"\nFitting {model_type} model...")
+        try:
+            inference.fit_model(features, model_type)
+        except Exception as e:
+            print(f"Error fitting {model_type}: {e}")
+            continue
+    
+    # Compare models
+    print("\nComparing models...")
+    comparison = inference.compare_models(features, criterion=config.bayesian.criterion)
+    
+    # Save results
+    results_file = output_dir / "model_comparison_results.pkl"
+    import pickle
+    with open(results_file, 'wb') as f:
+        pickle.dump({
+            'inference': inference,
+            'comparison': comparison
+        }, f)
+    
+    # Save comparison table
+    if 'comparison_table' in comparison:
+        table_file = output_dir / "comparison_table.csv"
+        comparison['comparison_table'].to_csv(table_file)
+        print(f"\nComparison table saved to {table_file}")
+    
+    # Print summary
+    summary = inference.summary()
+    print(f"\nBest model: {comparison.get('best_model', 'N/A')}")
+    print(f"Models compared: {summary['models']}")
+    
+    return 0
+
+
+def cmd_ppc(args, config: L3Config):
+    """Execute posterior predictive checks."""
+    results_path = Path(args.results)
+    features_path = Path(args.features)
+    
+    # Load results and features
+    print(f"Loading results from {results_path}")
+    import pickle
+    with open(results_path, 'rb') as f:
+        results = pickle.load(f)
+    
+    print(f"Loading features from {features_path}")
+    features = load_features(features_path, config.cloud)
+    if isinstance(features, dict):
+        features = next(iter(features.values()))
+    
+    # Run PPC
+    from lambda3.bayes import posterior_predictive_check
+    
+    if hasattr(results, 'trace'):
+        # Single result
+        ppc_results = posterior_predictive_check(results, features)
+    else:
+        # Multiple results - use best model
+        if 'best_model' in results and 'models' in results:
+            best_model = results['best_model']
+            ppc_results = posterior_predictive_check(
+                results['models'][best_model], features
+            )
+        else:
+            print("Error: Cannot determine which model to check")
+            return 1
+    
+    # Display results
+    print("\nBayesian p-values:")
+    for stat, p_val in ppc_results['bayesian_p_values'].items():
+        print(f"  {stat}: {p_val:.3f}")
+    
+    # Plot if requested
+    if args.output and PLOTTING_AVAILABLE:
+        from lambda3.plot import plot_posterior_predictive_check
+        output_path = Path(args.output)
+        
+        # Create figure (implementation would go in plot.py)
+        print(f"Note: PPC plotting not yet implemented in plot.py")
+        # plot_posterior_predictive_check(ppc_results, features.data, "Model", save_path=output_path)
+    
+    return 0
+
+
+def cmd_changepoints(args, config: L3Config):
+    """Execute change point detection."""
+    input_path = Path(args.input)
+    
+    # Load data
+    if input_path.suffix == '.csv':
+        print(f"Loading data from {input_path}")
+        series_dict = load_csv_series(input_path)
+        data = next(iter(series_dict.values()))
+    elif input_path.suffix == '.pkl':
+        print(f"Loading features from {input_path}")
+        features = load_features(input_path, config.cloud)
+        if isinstance(features, dict):
+            features = next(iter(features.values()))
+        data = features.data
+    else:
+        print(f"Error: Unknown input format {input_path.suffix}")
+        return 1
+    
+    # Detect change points
+    from lambda3.bayes import detect_change_points_automatic
+    
+    print(f"\nDetecting change points (window={args.window_size}, threshold={args.threshold})...")
+    change_points = detect_change_points_automatic(
+        data,
+        window_size=args.window_size,
+        threshold_factor=args.threshold
+    )
+    
+    print(f"\nDetected {len(change_points)} change points:")
+    for i, cp in enumerate(change_points):
+        print(f"  {i+1}. Time index: {cp}")
+    
+    # Plot if requested
+    if args.plot and PLOTTING_AVAILABLE:
+        import matplotlib.pyplot as plt
+        
+        plt.figure(figsize=(12, 6))
+        plt.plot(data, 'k-', alpha=0.7, label='Data')
+        
+        for i, cp in enumerate(change_points):
+            plt.axvline(cp, color='red', linestyle='--', alpha=0.7, 
+                       label='Change points' if i == 0 else '')
+        
+        plt.xlabel('Time')
+        plt.ylabel('Value')
+        plt.title('Detected Change Points')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+    
+    return 0
+
+
 def main():
     """Main entry point."""
     parser = create_parser()
@@ -795,6 +1185,16 @@ def main():
             return cmd_dashboard(args, config)
         elif args.command == 'cloud':
             return cmd_cloud(args, config)
+        elif args.command == 'bayesian':
+            return cmd_bayesian(args, config)
+        elif args.command == 'hierarchical':
+            return cmd_hierarchical(args, config)
+        elif args.command == 'compare':
+            return cmd_compare(args, config)
+        elif args.command == 'ppc':
+            return cmd_ppc(args, config)
+        elif args.command == 'changepoints':
+            return cmd_changepoints(args, config)
         else:
             print(f"Unknown command: {args.command}")
             return 1
