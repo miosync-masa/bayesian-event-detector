@@ -1516,3 +1516,368 @@ def plot_posterior_predictive_check(
         plt.close()
     else:
         plt.show()
+
+
+# ===============================
+# Posterior Distribution Plots
+# ===============================
+
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from typing import Dict, List, Optional, Tuple, Any
+import jax.numpy as jnp
+
+def plot_posterior_distributions_lambda3(
+    samples: Dict[str, np.ndarray],
+    titles: Optional[Dict[str, str]] = None,
+    hdi_prob: float = 0.94,
+    figsize: Tuple[float, float] = (15, 10),
+    color: str = 'skyblue'
+) -> None:
+    """
+    Plot posterior distributions in Lambda³/PyMC style with HDI intervals.
+    
+    Args:
+        samples: Dictionary of parameter samples
+        titles: Custom titles for each parameter
+        hdi_prob: HDI probability (default: 94%)
+        figsize: Figure size
+        color: Color for distributions
+    """
+    # Default parameter names and titles for Lambda³
+    default_titles = {
+        'beta_time': 'beta_time',
+        'beta_dLC_pos': 'beta_dLC_pos', 
+        'beta_dLC_neg': 'beta_dLC_neg',
+        'beta_interact_stress': 'beta_interact_stress',
+        'beta_interact_pos': 'beta_interact_pos',
+        'beta_interact_neg': 'beta_interact_neg',
+        'sigma': 'sigma'
+    }
+    
+    if titles is None:
+        titles = default_titles
+    
+    # Filter parameters that exist in samples
+    param_names = [p for p in default_titles.keys() if p in samples]
+    n_params = len(param_names)
+    
+    if n_params == 0:
+        print("No parameters to plot")
+        return
+    
+    # Create subplot grid
+    n_cols = 3
+    n_rows = (n_params + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    axes = axes.flatten() if n_params > 1 else [axes]
+    
+    for idx, param in enumerate(param_names):
+        ax = axes[idx]
+        
+        # Get samples
+        param_samples = np.array(samples[param]).flatten()
+        
+        # Calculate statistics
+        mean_val = np.mean(param_samples)
+        
+        # Calculate HDI
+        sorted_samples = np.sort(param_samples)
+        n_samples = len(sorted_samples)
+        hdi_low_idx = int((1 - hdi_prob) / 2 * n_samples)
+        hdi_high_idx = int((1 + hdi_prob) / 2 * n_samples)
+        hdi_low = sorted_samples[hdi_low_idx]
+        hdi_high = sorted_samples[hdi_high_idx]
+        
+        # Plot distribution
+        ax.hist(param_samples, bins=50, density=True, 
+                alpha=0.7, color=color, edgecolor='black', linewidth=0.5)
+        
+        # Add mean line
+        ax.axvline(mean_val, color='black', linestyle='-', linewidth=2)
+        
+        # Add HDI region
+        ax.axvspan(hdi_low, hdi_high, alpha=0.3, color='gray', 
+                   label=f'{int(hdi_prob*100)}% HDI')
+        
+        # Add HDI boundaries
+        ax.axvline(hdi_low, color='black', linestyle='--', linewidth=1)
+        ax.axvline(hdi_high, color='black', linestyle='--', linewidth=1)
+        
+        # Labels and title
+        title = titles.get(param, param)
+        ax.set_title(title, fontsize=14)
+        ax.set_xlabel('')
+        
+        # Add mean value text
+        ax.text(0.05, 0.95, f'mean={mean_val:.1f}', 
+                transform=ax.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        # Add HDI text
+        y_pos = ax.get_ylim()[1] * 0.02
+        ax.text(hdi_low, y_pos, f'{hdi_low:.0f}', ha='center', fontsize=10)
+        ax.text(hdi_high, y_pos, f'{hdi_high:.0f}', ha='center', fontsize=10)
+        
+        # Grid
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylabel('')
+    
+    # Hide unused subplots
+    for idx in range(n_params, len(axes)):
+        axes[idx].set_visible(False)
+    
+    plt.suptitle('Posterior Distributions', fontsize=16, y=0.98)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_lambda3_posterior_grid(
+    results: Dict[str, Any],
+    param_subset: Optional[List[str]] = None,
+    hdi_prob: float = 0.94
+) -> None:
+    """
+    Plot Lambda³ posterior distributions in grid layout (exactly as shown in image).
+    
+    Args:
+        results: Results dictionary containing 'samples'
+        param_subset: Subset of parameters to plot
+        hdi_prob: HDI probability
+    """
+    if 'samples' not in results:
+        print("No samples found in results")
+        return
+    
+    samples = results['samples']
+    
+    # Lambda³ specific parameter mapping
+    lambda3_params = {
+        'beta_time': 'β_time',
+        'beta_dLC_pos': 'β_ΔΛC⁺',
+        'beta_dLC_neg': 'β_ΔΛC⁻',
+        'beta_interact_stress': 'β_interact_ρT',
+        'beta_interact_pos': 'β_interact_ΔΛC⁺',
+        'beta_interact_neg': 'β_interact_ΔΛC⁻',
+        'sigma': 'σ'
+    }
+    
+    # Use subset if provided
+    if param_subset:
+        params_to_plot = param_subset
+    else:
+        params_to_plot = [p for p in lambda3_params.keys() if p in samples]
+    
+    n_params = len(params_to_plot)
+    
+    # Create figure with 2x3 grid
+    fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+    axes = axes.flatten()
+    
+    for idx, param in enumerate(params_to_plot):
+        if idx >= 6:  # Only plot first 6 parameters
+            break
+            
+        ax = axes[idx]
+        
+        # Get samples
+        param_samples = np.array(samples[param]).flatten()
+        
+        # Calculate statistics
+        mean_val = np.mean(param_samples)
+        
+        # Calculate HDI
+        sorted_samples = np.sort(param_samples)
+        n_samples = len(sorted_samples)
+        hdi_low_idx = int((1 - hdi_prob) / 2 * n_samples)
+        hdi_high_idx = int((1 + hdi_prob) / 2 * n_samples)
+        hdi_low = sorted_samples[hdi_low_idx]
+        hdi_high = sorted_samples[hdi_high_idx]
+        
+        # Create histogram
+        counts, bins, patches = ax.hist(param_samples, bins=30, density=True,
+                                       alpha=0.8, color='skyblue', 
+                                       edgecolor='darkblue', linewidth=0.5)
+        
+        # Add smooth density curve (optional)
+        from scipy import stats
+        kde = stats.gaussian_kde(param_samples)
+        x_smooth = np.linspace(param_samples.min(), param_samples.max(), 200)
+        ax.plot(x_smooth, kde(x_smooth), 'b-', linewidth=2, alpha=0.8)
+        
+        # Mark HDI region
+        ax.axvspan(hdi_low, hdi_high, alpha=0.2, color='gray')
+        
+        # Add vertical lines for HDI bounds
+        ax.axvline(hdi_low, color='black', linestyle='--', linewidth=1)
+        ax.axvline(hdi_high, color='black', linestyle='--', linewidth=1)
+        
+        # Add HDI labels at bottom
+        y_min = ax.get_ylim()[0]
+        ax.text(hdi_low, y_min, f'{hdi_low:.0f}', 
+                ha='center', va='bottom', fontsize=10)
+        ax.text(hdi_high, y_min, f'{hdi_high:.0f}', 
+                ha='center', va='bottom', fontsize=10)
+        
+        # Add mean label
+        ax.text(0.95, 0.95, f'mean={mean_val:.1f}',
+                transform=ax.transAxes, ha='right', va='top',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                         edgecolor='gray', alpha=0.8),
+                fontsize=10)
+        
+        # Set title
+        title = lambda3_params.get(param, param)
+        ax.set_title(title, fontsize=12, pad=10)
+        
+        # Clean up axes
+        ax.set_xlabel('')
+        ax.set_ylabel('')
+        ax.set_xlim(hdi_low - (hdi_high - hdi_low) * 0.2,
+                    hdi_high + (hdi_high - hdi_low) * 0.2)
+        
+        # Add HDI label
+        ax.text(0.5, 0.02, f'{int(hdi_prob*100)}% HDI',
+                transform=ax.transAxes, ha='center', va='bottom',
+                fontsize=9, style='italic')
+        
+        # Light grid
+        ax.grid(axis='y', alpha=0.3, linestyle=':')
+        ax.set_axisbelow(True)
+    
+    # Hide unused subplots
+    for idx in range(n_params, 6):
+        axes[idx].set_visible(False)
+    
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_lambda3_trace_and_density(
+    samples: Dict[str, np.ndarray],
+    param_names: Optional[List[str]] = None,
+    figsize: Tuple[float, float] = (14, 3)
+) -> None:
+    """
+    Plot trace plots and density plots side by side for each parameter.
+    
+    Args:
+        samples: Dictionary of parameter samples
+        param_names: Parameters to plot (default: all)
+        figsize: Figure size per parameter
+    """
+    if param_names is None:
+        param_names = list(samples.keys())
+    
+    for param in param_names:
+        if param not in samples:
+            continue
+            
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+        
+        param_samples = np.array(samples[param]).flatten()
+        
+        # Trace plot
+        ax1.plot(param_samples, alpha=0.7, linewidth=0.5)
+        ax1.set_title(f'{param} - Trace Plot')
+        ax1.set_xlabel('Iteration')
+        ax1.set_ylabel('Value')
+        ax1.grid(True, alpha=0.3)
+        
+        # Density plot with HDI
+        ax2.hist(param_samples, bins=50, density=True, 
+                alpha=0.7, color='skyblue', edgecolor='darkblue')
+        
+        # Add KDE
+        from scipy import stats
+        kde = stats.gaussian_kde(param_samples)
+        x_smooth = np.linspace(param_samples.min(), param_samples.max(), 200)
+        ax2.plot(x_smooth, kde(x_smooth), 'b-', linewidth=2)
+        
+        # Calculate and show HDI
+        sorted_samples = np.sort(param_samples)
+        hdi_low = sorted_samples[int(0.03 * len(sorted_samples))]
+        hdi_high = sorted_samples[int(0.97 * len(sorted_samples))]
+        
+        ax2.axvline(hdi_low, color='red', linestyle='--', alpha=0.7)
+        ax2.axvline(hdi_high, color='red', linestyle='--', alpha=0.7)
+        ax2.axvspan(hdi_low, hdi_high, alpha=0.2, color='red')
+        
+        ax2.set_title(f'{param} - Posterior Density')
+        ax2.set_xlabel('Value')
+        ax2.set_ylabel('Density')
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        plt.show()
+
+# Example usage function
+def demo_lambda3_posteriors():
+    """Demo function showing how to use the posterior plotting functions"""
+    
+    # Generate sample data (replace with actual MCMC samples)
+    np.random.seed(42)
+    
+    samples = {
+        'beta_time': np.random.normal(140, 10, 1000),
+        'beta_dLC_pos': np.random.normal(-7.8, 2, 1000),
+        'beta_dLC_neg': np.random.normal(-6.9, 1.5, 1000),
+        'beta_interact_stress': np.random.normal(23, 0.5, 1000),
+        'beta_interact_pos': np.random.normal(-0.36, 0.2, 1000),
+        'beta_interact_neg': np.random.normal(-1.6, 0.3, 1000)
+    }
+    
+    # Create results dict
+    results = {'samples': samples}
+    
+    # Plot in Lambda³ style (as shown in the image)
+    print("Plotting Lambda³ posterior distributions...")
+    plot_lambda3_posterior_grid(results, hdi_prob=0.94)
+    
+    # Alternative: plot with trace plots
+    print("\nPlotting trace and density plots...")
+    plot_lambda3_trace_and_density(samples, param_names=['beta_time', 'beta_dLC_pos'])
+
+
+# Integration with NumPyro results
+def plot_numpyro_lambda3_posteriors(numpyro_results: Dict[str, Any]):
+    """
+    Plot posteriors from NumPyro Lambda³ analysis results.
+    
+    Args:
+        numpyro_results: Results from Lambda³ NumPyro inference
+    """
+    if 'inference_results' in numpyro_results:
+        # Extract samples from first series
+        first_series = list(numpyro_results['inference_results'].keys())[0]
+        result = numpyro_results['inference_results'][first_series]
+        
+        if 'samples' in result:
+            # Map NumPyro parameter names to Lambda³ names
+            param_mapping = {
+                'lambda_intercept': 'beta_time',
+                'lambda_flow': 'beta_time',
+                'lambda_struct_pos': 'beta_dLC_pos',
+                'lambda_struct_neg': 'beta_dLC_neg',
+                'rho_tension': 'beta_interact_stress',
+                'lambda_interact_pos': 'beta_interact_pos',
+                'lambda_interact_neg': 'beta_interact_neg',
+                'sigma_obs': 'sigma'
+            }
+            
+            # Remap samples
+            mapped_samples = {}
+            for numpyro_name, lambda3_name in param_mapping.items():
+                if numpyro_name in result['samples']:
+                    mapped_samples[lambda3_name] = result['samples'][numpyro_name]
+            
+            # Create results dict and plot
+            plot_results = {'samples': mapped_samples}
+            plot_lambda3_posterior_grid(plot_results, hdi_prob=0.94)
+
+
+if __name__ == "__main__":
+    # Run demo
+    demo_lambda3_posteriors()
