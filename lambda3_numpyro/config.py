@@ -25,6 +25,16 @@ SYNC_THRESHOLD_DEFAULT = 0.3         # Default threshold for sync network edges
 NOISE_STD_DEFAULT = 0.5              # Default noise standard deviation
 NOISE_STD_HIGH = 1.5                 # High noise standard deviation
 
+# Lambda³ theory symbols mapping
+LAMBDA3_SYMBOLS = {
+    'sigma_s': 'sync_rate',          # σₛ: synchronization rate
+    'Lambda': 'structural_tensor',    # Λ: structural tensor
+    'Delta_LambdaC': 'jump_events',  # ΔΛC: structural jumps
+    'rho_T': 'tension_scalar',       # ρT: tension scalar
+    'Lambda_F': 'progression_vector'  # ΛF: progression vector
+}
+
+
 # ===============================
 # Configuration Classes
 # ===============================
@@ -61,7 +71,7 @@ class BayesianConfig:
     num_chains: int = 4
     max_treedepth: int = 10
     
-    # Prior hyperparameters
+    # Prior hyperparameters - unified for all models
     prior_scales: Dict[str, float] = field(default_factory=lambda: {
         'beta_0': 2.0,
         'beta_time': 1.0,
@@ -69,7 +79,11 @@ class BayesianConfig:
         'beta_dLC_neg': 5.0,
         'beta_rhoT': 3.0,
         'beta_interact': 3.0,
-        'sigma_obs': 1.0
+        'beta_local_jump': 2.0,
+        'sigma_obs': 1.0,
+        'innovation_scale': 0.1,
+        'sigma_base': 1.0,
+        'sigma_scale': 0.5
     })
     
     def validate(self):
@@ -152,8 +166,7 @@ class L3Config:
     cloud: CloudConfig = field(default_factory=CloudConfig)
     plotting: PlottingConfig = field(default_factory=PlottingConfig)
     
-    # Analysis parameters
-    analyze_all_pairs: bool = True
+    # Analysis parameters (removed analyze_all_pairs)
     max_pairs: Optional[int] = None
     parallel_pairs: bool = False
     
@@ -165,10 +178,18 @@ class L3Config:
     # Random seed for reproducibility
     random_seed: int = 42
     
+    # JAX configuration
+    enable_x64: bool = True  # Enable 64-bit computation in JAX
+    
     def __post_init__(self):
-        """Create output directory if needed"""
+        """Create output directory if needed and configure JAX"""
         if self.output_dir and self.save_intermediate:
             Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Configure JAX for 64-bit if enabled
+        if self.enable_x64:
+            import jax
+            jax.config.update("jax_enable_x64", True)
     
     def validate(self):
         """Validate all configurations"""
@@ -260,6 +281,8 @@ class L3Config:
             config.verbose = env_val.lower() in ['true', '1', 'yes']
         if env_val := os.getenv('L3_RANDOM_SEED'):
             config.random_seed = int(env_val)
+        if env_val := os.getenv('L3_ENABLE_X64'):
+            config.enable_x64 = env_val.lower() in ['true', '1', 'yes']
         
         return config
     
@@ -298,13 +321,13 @@ class L3Config:
                 'figure_format': self.plotting.figure_format,
                 'figure_dir': self.plotting.figure_dir
             },
-            'analyze_all_pairs': self.analyze_all_pairs,
             'max_pairs': self.max_pairs,
             'parallel_pairs': self.parallel_pairs,
             'output_dir': self.output_dir,
             'save_intermediate': self.save_intermediate,
             'verbose': self.verbose,
-            'random_seed': self.random_seed
+            'random_seed': self.random_seed,
+            'enable_x64': self.enable_x64
         }
     
     def save(self, filepath: str):
@@ -336,7 +359,8 @@ class L3Config:
             'backend': backend,
             'device_count': device_count,
             'recommended_chains': min(self.bayesian.num_chains, device_count) if backend == 'cpu' else self.bayesian.num_chains,
-            'memory_efficient': backend == 'gpu' and self.bayesian.draws > 10000
+            'memory_efficient': backend == 'gpu' and self.bayesian.draws > 10000,
+            'x64_enabled': self.enable_x64
         }
 
 
