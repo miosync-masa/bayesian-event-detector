@@ -99,7 +99,8 @@ def analyze_pair(
         name_b: _calculate_causality_profile(features_b, features_a, name_b, name_a)
     }
     
-    # Create metadata
+    # Import necessary for analysis
+    from datetime import datetime
     metadata = {
         'name_a': name_a,
         'name_b': name_b,
@@ -338,6 +339,323 @@ def calculate_causality_matrix(
                 causality_mat[i, j] = count_effect / max(count_cause, 1)
     
     return causality_mat, series_names
+
+
+# ===============================
+# Advanced Analysis Functions
+# ===============================
+
+def analyze_with_changepoints(
+    features: Lambda3FeatureSet,
+    config: L3Config,
+    auto_detect: bool = True,
+    change_points: Optional[List[int]] = None
+) -> Dict[str, Any]:
+    """
+    Analyze series with structural change points.
+    
+    Args:
+        features: Lambda³ features
+        config: Configuration
+        auto_detect: Whether to auto-detect change points
+        change_points: Manual change points (if not auto-detecting)
+        
+    Returns:
+        Analysis results including change points
+    """
+    from .bayes import detect_change_points_automatic, fit_dynamic_model
+    
+    # Detect change points if needed
+    if auto_detect and change_points is None:
+        print("Auto-detecting change points...")
+        change_points = detect_change_points_automatic(features.data)
+        print(f"Detected {len(change_points)} change points: {change_points}")
+    
+    # Fit dynamic model with change points
+    dynamic_results = fit_dynamic_model(
+        features, config, change_points=change_points
+    )
+    
+    # Analyze each segment between change points
+    segments = []
+    boundaries = [0] + change_points + [len(features.data)]
+    
+    for i in range(len(boundaries) - 1):
+        start, end = boundaries[i], boundaries[i + 1]
+        segment_data = features.data[start:end]
+        
+        segments.append({
+            'start': start,
+            'end': end,
+            'length': end - start,
+            'mean': np.mean(segment_data),
+            'std': np.std(segment_data),
+            'trend': np.polyfit(range(len(segment_data)), segment_data, 1)[0] if len(segment_data) > 1 else 0
+        })
+    
+    return {
+        'dynamic_results': dynamic_results,
+        'change_points': change_points,
+        'segments': segments,
+        'n_segments': len(segments)
+    }
+
+
+def run_comprehensive_analysis(
+    features_dict: Dict[str, Lambda3FeatureSet],
+    config: L3Config,
+    include_bayesian: bool = True,
+    include_regimes: bool = True,
+    include_changepoints: bool = True
+) -> Dict[str, Any]:
+    """
+    Run comprehensive analysis including all advanced features.
+    
+    Args:
+        features_dict: Dictionary of features for all series
+        config: Configuration
+        include_bayesian: Whether to run Bayesian analysis
+        include_regimes: Whether to detect regimes
+        include_changepoints: Whether to detect change points
+        
+    Returns:
+        Comprehensive analysis results
+    """
+    results = {
+        'timestamp': datetime.now().isoformat(),
+        'n_series': len(features_dict),
+        'series_names': list(features_dict.keys())
+    }
+    
+    # 1. Cross-series analysis
+    print("\n1. Running cross-series analysis...")
+    cross_results = analyze_multiple_series(features_dict, config)
+    results['cross_analysis'] = cross_results
+    
+    # 2. Causality analysis
+    print("\n2. Calculating causality matrix...")
+    causality_mat, series_names = calculate_causality_matrix(features_dict)
+    results['causality'] = {
+        'matrix': causality_mat,
+        'series_names': series_names
+    }
+    
+    # 3. Regime detection (per series)
+    if include_regimes:
+        print("\n3. Detecting regimes...")
+        regime_results = {}
+        for name, features in features_dict.items():
+            regime_info = detect_regimes(features)
+            regime_results[name] = regime_info
+        results['regimes'] = regime_results
+    
+    # 4. Change point detection (per series)
+    if include_changepoints:
+        print("\n4. Detecting change points...")
+        changepoint_results = {}
+        for name, features in features_dict.items():
+            cp_analysis = analyze_with_changepoints(
+                features, config, auto_detect=True
+            )
+            changepoint_results[name] = cp_analysis
+        results['changepoints'] = changepoint_results
+    
+    # 5. Bayesian analysis (if requested)
+    if include_bayesian:
+        print("\n5. Running Bayesian analysis...")
+        from .bayes import Lambda3BayesianInference
+        
+        bayesian_results = {}
+        inference = Lambda3BayesianInference(config)
+        
+        # Analyze first series in detail
+        first_name = list(features_dict.keys())[0]
+        first_features = features_dict[first_name]
+        
+        # Fit multiple models
+        inference.fit_model(first_features, 'base')
+        inference.fit_model(first_features, 'dynamic')
+        
+        # Compare and get best
+        comparison = inference.compare_models(first_features)
+        best_name, best_results = inference.get_best_model()
+        
+        bayesian_results['inference'] = inference
+        bayesian_results['comparison'] = comparison
+        bayesian_results['best_model'] = best_name
+        
+        results['bayesian'] = bayesian_results
+    
+    # 6. Generate summary
+    results['summary'] = _generate_comprehensive_summary(results)
+    
+    return results
+
+
+def _generate_comprehensive_summary(results: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate summary of comprehensive analysis."""
+    summary = {
+        'n_series': results['n_series'],
+        'series_names': results['series_names'],
+        'analysis_timestamp': results['timestamp']
+    }
+    
+    # Cross-analysis summary
+    if 'cross_analysis' in results:
+        cross = results['cross_analysis']
+        summary['n_significant_interactions'] = np.sum(
+            np.abs(cross.interaction_matrix) > 0.1
+        )
+        summary['max_sync_rate'] = np.max(
+            cross.sync_matrix[np.triu_indices_from(cross.sync_matrix, k=1)]
+        )
+    
+    # Causality summary
+    if 'causality' in results:
+        causality_mat = results['causality']['matrix']
+        summary['max_causality'] = np.max(causality_mat[causality_mat < 1])
+        summary['causality_density'] = np.mean(causality_mat > 0.1)
+    
+    # Regime summary
+    if 'regimes' in results:
+        summary['regime_counts'] = {
+            name: info.n_regimes 
+            for name, info in results['regimes'].items()
+        }
+    
+    # Change point summary
+    if 'changepoints' in results:
+        summary['changepoint_counts'] = {
+            name: len(cp_result['change_points'])
+            for name, cp_result in results['changepoints'].items()
+        }
+    
+    # Bayesian summary
+    if 'bayesian' in results:
+        summary['best_bayesian_model'] = results['bayesian']['best_model']
+    
+    return summary
+
+
+# ===============================
+# Export Results Functions
+# ===============================
+
+def export_analysis_report(
+    results: Union[AnalysisResult, CrossAnalysisResult, Dict[str, Any]],
+    output_path: Union[str, Path],
+    format: str = 'html'
+) -> None:
+    """
+    Export analysis results as a formatted report.
+    
+    Args:
+        results: Analysis results
+        output_path: Output file path
+        format: 'html', 'pdf', or 'markdown'
+    """
+    output_path = Path(output_path)
+    
+    if format == 'html':
+        _export_html_report(results, output_path)
+    elif format == 'pdf':
+        _export_pdf_report(results, output_path)
+    elif format == 'markdown':
+        _export_markdown_report(results, output_path)
+    else:
+        raise ValueError(f"Unknown format: {format}")
+    
+    print(f"Report exported to {output_path}")
+
+
+def _export_html_report(results: Any, output_path: Path) -> None:
+    """Export results as HTML report."""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Lambda³ Analysis Report</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            h1 { color: #333; }
+            h2 { color: #666; }
+            table { border-collapse: collapse; width: 100%; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .metric { font-weight: bold; color: #0066cc; }
+        </style>
+    </head>
+    <body>
+        <h1>Lambda³ Analysis Report</h1>
+    """
+    
+    # Add content based on result type
+    if isinstance(results, dict) and 'summary' in results:
+        # Comprehensive results
+        summary = results['summary']
+        html_content += f"""
+        <h2>Summary</h2>
+        <p>Analysis of {summary['n_series']} series</p>
+        <ul>
+            <li>Series: {', '.join(summary['series_names'])}</li>
+            <li>Timestamp: {summary['analysis_timestamp']}</li>
+        </ul>
+        """
+        
+        if 'max_sync_rate' in summary:
+            html_content += f"""
+            <h2>Synchronization</h2>
+            <p>Maximum sync rate: <span class="metric">{summary['max_sync_rate']:.3f}</span></p>
+            """
+        
+        if 'changepoint_counts' in summary:
+            html_content += "<h2>Change Points</h2><ul>"
+            for series, count in summary['changepoint_counts'].items():
+                html_content += f"<li>{series}: {count} change points</li>"
+            html_content += "</ul>"
+    
+    html_content += """
+    </body>
+    </html>
+    """
+    
+    with open(output_path, 'w') as f:
+        f.write(html_content)
+
+
+def _export_markdown_report(results: Any, output_path: Path) -> None:
+    """Export results as Markdown report."""
+    md_content = "# Lambda³ Analysis Report\n\n"
+    
+    if isinstance(results, AnalysisResult):
+        # Single pair analysis
+        md_content += f"## Series Analysis: {results.series_names[0]} ↔ {results.series_names[1]}\n\n"
+        md_content += f"- **Max Sync Rate**: {results.sync_profile.max_sync_rate:.3f}\n"
+        md_content += f"- **Optimal Lag**: {results.sync_profile.optimal_lag}\n\n"
+        
+        md_content += "### Interaction Effects\n\n"
+        for effect, value in results.interaction_effects.items():
+            md_content += f"- {effect}: {value:.3f}\n"
+    
+    elif isinstance(results, dict) and 'summary' in results:
+        # Comprehensive results
+        summary = results['summary']
+        md_content += f"## Summary\n\n"
+        md_content += f"- **Series**: {', '.join(summary['series_names'])}\n"
+        md_content += f"- **Analysis Date**: {summary['analysis_timestamp']}\n\n"
+        
+        if 'best_bayesian_model' in summary:
+            md_content += f"### Bayesian Analysis\n\n"
+            md_content += f"- **Best Model**: {summary['best_bayesian_model']}\n\n"
+    
+    with open(output_path, 'w') as f:
+        f.write(md_content)
+
+
+def _export_pdf_report(results: Any, output_path: Path) -> None:
+    """Export results as PDF report (requires additional dependencies)."""
+    # This would require libraries like reportlab or weasyprint
+    raise NotImplementedError("PDF export requires additional dependencies")
 
 
 # ===============================
