@@ -649,3 +649,128 @@ def detect_scale_breaks(
             scale_breaks[scale] = []
     
     return scale_breaks
+
+# ===============================
+# Export Functions
+# ===============================
+
+def extract_multiscale_features(
+    data: np.ndarray,
+    scales: List[int] = [5, 10, 20, 50],
+    config: Optional[FeatureConfig] = None
+) -> Dict[int, Lambda3FeatureSet]:
+    """
+    Extract Lambda³ features at multiple time scales.
+    
+    Multi-scale analysis reveals scale-dependent structural patterns in Λ.
+    
+    Args:
+        data: Original time series
+        scales: List of window sizes for multi-scale analysis
+        config: Feature configuration
+        
+    Returns:
+        Dict mapping scale to features
+    """
+    if config is None:
+        config = FeatureConfig()
+    
+    multiscale_features = {}
+    
+    for scale in scales:
+        # Create scale-specific config
+        scale_config = FeatureConfig(
+            window=scale,
+            local_window=scale,
+            delta_percentile=config.delta_percentile,
+            local_jump_percentile=config.local_jump_percentile,
+            lag_window=config.lag_window
+        )
+        
+        # Extract features at this scale
+        features = extract_lambda3_features(data, scale_config)
+        features.metadata['scale'] = scale
+        features.metadata['scale_description'] = f'Lambda³ features at scale τ={scale}'
+        multiscale_features[scale] = features
+    
+    return multiscale_features
+
+
+def extract_features_dict(
+    series_dict: Dict[str, np.ndarray],
+    config: Optional[Union[L3Config, FeatureConfig]] = None,
+    show_progress: bool = True
+) -> Dict[str, Lambda3FeatureSet]:
+    """
+    Extract features from multiple time series.
+    
+    Args:
+        series_dict: Dictionary of series {name: data}
+        config: Configuration object
+        show_progress: Whether to show progress messages
+        
+    Returns:
+        Dict[str, Lambda3FeatureSet]: Features for each series
+    """
+    features = {}
+    
+    for i, (name, data) in enumerate(series_dict.items(), 1):
+        if show_progress:
+            print(f"[{i}/{len(series_dict)}] Extracting Lambda³ features for {name}...")
+        
+        try:
+            features[name] = extract_lambda3_features(data, config, series_name=name)
+            if show_progress:
+                feats = features[name]
+                print(f"  ✓ Length: {feats.length}, "
+                      f"ΔΛC⁺: {feats.n_pos_jumps}, "
+                      f"ΔΛC⁻: {feats.n_neg_jumps}, "
+                      f"Mean ρT: {feats.mean_tension:.3f}")
+        except Exception as e:
+            print(f"  ✗ Error extracting features for {name}: {e}")
+            continue
+    
+    return features
+
+
+def detect_scale_breaks(
+    multiscale_features: Dict[int, Lambda3FeatureSet],
+    threshold_std: float = 2.0
+) -> Dict[int, List[int]]:
+    """
+    Detect scale-dependent structural breaks.
+    
+    Identifies scale-specific ΔΛC singularities based on ρT outliers.
+    
+    Args:
+        multiscale_features: Features at different scales
+        threshold_std: Number of standard deviations for break detection
+        
+    Returns:
+        Dict mapping scale to list of break indices
+    """
+    scale_breaks = {}
+    
+    for scale, features in multiscale_features.items():
+        # Use tension scalar (ρT) for break detection
+        rho_t = features.rho_T
+        
+        # Detect outliers in tension
+        mean_tension = np.mean(rho_t)
+        std_tension = np.std(rho_t)
+        threshold = mean_tension + threshold_std * std_tension
+        
+        # Find break points (ρT singularities)
+        breaks = np.where(rho_t > threshold)[0]
+        
+        # Filter consecutive breaks (keep first)
+        if len(breaks) > 0:
+            filtered_breaks = [breaks[0]]
+            for b in breaks[1:]:
+                if b - filtered_breaks[-1] > scale:  # Minimum separation
+                    filtered_breaks.append(b)
+            scale_breaks[scale] = filtered_breaks
+        else:
+            scale_breaks[scale] = []
+    
+    return scale_breaks
