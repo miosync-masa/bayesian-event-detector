@@ -39,7 +39,6 @@ def _check_plotting():
 # ===============================
 # Feature Visualization
 # ===============================
-
 def plot_features(
     features: Union[Lambda3FeatureSet, Dict[str, Lambda3FeatureSet]],
     title: Optional[str] = None,
@@ -47,7 +46,7 @@ def plot_features(
     config: Optional[PlottingConfig] = None
 ) -> None:
     """
-    Plot Lambda³ features for one or more series.
+    Plot Lambda³ features for one or more series (PyMC/lambda3_abc style).
     
     Args:
         features: Single feature set or dictionary
@@ -60,9 +59,6 @@ def plot_features(
     if config is None:
         config = PlottingConfig()
     
-    # Set style
-    plt.style.use(config.style)
-    
     # Handle single vs multiple features
     if isinstance(features, Lambda3FeatureSet):
         features_dict = {'Series': features}
@@ -71,92 +67,77 @@ def plot_features(
     
     n_series = len(features_dict)
     
-    # Create subplots
-    fig, axes = plt.subplots(
-        n_series, 3,
-        figsize=(config.figure_size[0], config.figure_size[1] * n_series / 2),
-        sharex=True
-    )
+    # PyMCスタイルの大きな図
+    fig, axes = plt.subplots(n_series, 1, figsize=(15, 5 * n_series), sharex=True)
     
     if n_series == 1:
-        axes = axes.reshape(1, -1)
+        axes = [axes]
     
-    # Plot each series
-    for idx, (name, feat) in enumerate(features_dict.items()):
-        # Data and events
-        ax = axes[idx, 0]
+    # Plot each series in PyMC style
+    for i, (name, feat) in enumerate(features_dict.items()):
+        ax = axes[i]
         time = np.arange(len(feat.data))
         
-        # Plot data
-        ax.plot(time, feat.data, color='gray', alpha=0.6, linewidth=1)
+        # データプロット（グレーの点）
+        ax.plot(feat.data, 'o', color='gray', markersize=4, alpha=0.6, label='Original Data')
         
-        # Mark jump events
+        # グリーンの滑らかな線（ここではρTベースの移動平均を使用）
+        window = min(10, len(feat.data) // 10)
+        if window > 1:
+            smoothed = np.convolve(feat.data, np.ones(window)/window, mode='same')
+            ax.plot(smoothed, color='C2', lw=2, label='Smoothed')
+        
+        # ジャンプイベントの強調表示
+        # 正のジャンプ（青い大きな○）
         pos_idx = np.where(feat.delta_LambdaC_pos > 0)[0]
-        neg_idx = np.where(feat.delta_LambdaC_neg > 0)[0]
-        
         if len(pos_idx) > 0:
-            ax.scatter(pos_idx, feat.data[pos_idx], 
-                      color='dodgerblue', s=50, alpha=0.8, 
-                      label=f'Pos jumps ({len(pos_idx)})')
+            ax.plot(pos_idx, feat.data[pos_idx], 'o', color='dodgerblue',
+                   markersize=10, label=f'Positive ΔΛC ({len(pos_idx)})')
+            # 垂直線で強調
+            for idx in pos_idx:
+                ax.axvline(x=idx, color='dodgerblue', linestyle='--', alpha=0.5)
         
+        # 負のジャンプ（オレンジの大きな○）
+        neg_idx = np.where(feat.delta_LambdaC_neg > 0)[0]
         if len(neg_idx) > 0:
-            ax.scatter(neg_idx, feat.data[neg_idx],
-                      color='orangered', s=50, alpha=0.8,
-                      label=f'Neg jumps ({len(neg_idx)})')
+            ax.plot(neg_idx, feat.data[neg_idx], 'o', color='orange',
+                   markersize=10, label=f'Negative ΔΛC ({len(neg_idx)})')
+            # 垂直線で強調
+            for idx in neg_idx:
+                ax.axvline(x=idx, color='orange', linestyle='-.', alpha=0.5)
         
-        ax.set_ylabel(name)
-        if idx == 0:
-            ax.set_title('Data & Jump Events')
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
+        # ローカルジャンプ（マゼンタの星）
+        local_idx = np.where(feat.local_jump > 0)[0]
+        if len(local_idx) > 0:
+            # グローバルジャンプと重複しないローカルジャンプのみ表示
+            global_jumps = set(pos_idx) | set(neg_idx)
+            local_only = [idx for idx in local_idx if idx not in global_jumps]
+            if local_only:
+                ax.plot(local_only, feat.data[local_only], '*', color='magenta',
+                       markersize=12, alpha=0.7, label=f'Local Jump ({len(local_only)})')
         
-        # Tension scalar
-        ax = axes[idx, 1]
-        ax.plot(time, feat.rho_T, color='green', alpha=0.8)
-        ax.fill_between(time, 0, feat.rho_T, color='green', alpha=0.2)
+        # タイトルとラベル
+        plot_title = f"{name}: Lambda³ Features" if title is None else f"{title} - {name}"
+        ax.set_title(plot_title, fontsize=16)
+        ax.set_xlabel('Time Step', fontsize=12)
+        ax.set_ylabel('Value', fontsize=12)
         
-        # Mark high tension periods
-        high_tension = feat.rho_T > np.percentile(feat.rho_T, 90)
-        if np.any(high_tension):
-            ax.scatter(time[high_tension], feat.rho_T[high_tension],
-                      color='red', s=20, alpha=0.6)
+        # 凡例（重複除去）
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        ax.legend(by_label.values(), by_label.keys(), fontsize=12)
         
-        if idx == 0:
-            ax.set_title('Tension Scalar (ρT)')
-        ax.grid(True, alpha=0.3)
+        # グリッド（Y軸のみ）
+        ax.grid(axis='y', linestyle=':', alpha=0.7)
         
-        # Event timeline
-        ax = axes[idx, 2]
-        
-        # Create event timeline
-        events = np.zeros(len(time))
-        events[feat.delta_LambdaC_pos > 0] = 1
-        events[feat.delta_LambdaC_neg > 0] = -1
-        events[feat.local_jump > 0] = np.where(events[feat.local_jump > 0] == 0, 0.5, events[feat.local_jump > 0])
-        
-        # Plot as stem plot
-        colors = ['orangered' if e < 0 else 'dodgerblue' if e > 0 else 'purple' 
-                 for e in events]
-        
-        for t, e, c in zip(time[events != 0], events[events != 0], 
-                          [colors[i] for i in range(len(colors)) if events[i] != 0]):
-            ax.vlines(t, 0, e, colors=c, alpha=0.7)
-        
-        ax.axhline(y=0, color='black', linewidth=0.5)
-        ax.set_ylim(-1.5, 1.5)
-        ax.set_yticks([-1, 0, 1])
-        ax.set_yticklabels(['Neg', '0', 'Pos'])
-        
-        if idx == 0:
-            ax.set_title('Event Timeline')
-        ax.grid(True, alpha=0.3)
-    
-    # Set common x-label
-    axes[-1, 1].set_xlabel('Time')
-    
-    # Overall title
-    if title:
-        fig.suptitle(title, fontsize=16)
+        # テンション情報を右上に表示
+        mean_tension = np.mean(feat.rho_T)
+        max_tension = np.max(feat.rho_T)
+        info_text = f'Mean ρT: {mean_tension:.3f}\nMax ρT: {max_tension:.3f}'
+        ax.text(0.98, 0.98, info_text, transform=ax.transAxes,
+                verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8),
+                fontsize=10)
     
     plt.tight_layout()
     
@@ -168,10 +149,77 @@ def plot_features(
         plt.show()
 
 
+# 追加：テンションとイベントの関係を示す補助プロット関数
+def plot_features_with_tension(
+    features: Lambda3FeatureSet,
+    title: Optional[str] = None,
+    save_path: Optional[Union[str, Path]] = None,
+    config: Optional[PlottingConfig] = None
+) -> None:
+    """
+    データとテンションを上下に表示するプロット（lambda3_abc.py スタイル）
+    """
+    _check_plotting()
+    
+    if config is None:
+        config = PlottingConfig()
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 8), sharex=True,
+                                   gridspec_kw={'height_ratios': [3, 1]})
+    
+    time = np.arange(len(features.data))
+    
+    # 上段：データとイベント
+    ax1.plot(features.data, 'o', color='gray', markersize=3, alpha=0.5, label='Data')
+    
+    # ジャンプイベント
+    pos_idx = np.where(features.delta_LambdaC_pos > 0)[0]
+    neg_idx = np.where(features.delta_LambdaC_neg > 0)[0]
+    local_idx = np.where(features.local_jump > 0)[0]
+    
+    if len(pos_idx) > 0:
+        ax1.scatter(pos_idx, features.data[pos_idx], color='dodgerblue', 
+                   s=100, marker='^', label='Positive ΔΛC', zorder=5)
+    if len(neg_idx) > 0:
+        ax1.scatter(neg_idx, features.data[neg_idx], color='orange',
+                   s=100, marker='v', label='Negative ΔΛC', zorder=5)
+    if len(local_idx) > 0:
+        ax1.scatter(local_idx, features.data[local_idx], color='magenta',
+                   s=80, marker='*', label='Local Jump', zorder=4, alpha=0.7)
+    
+    ax1.set_ylabel('Value', fontsize=12)
+    ax1.legend(fontsize=10)
+    ax1.grid(axis='y', linestyle=':', alpha=0.7)
+    if title:
+        ax1.set_title(title, fontsize=16)
+    
+    # 下段：テンションスカラー
+    ax2.fill_between(time, 0, features.rho_T, color='green', alpha=0.3)
+    ax2.plot(time, features.rho_T, color='green', linewidth=2, label='Tension Scalar ρT')
+    
+    # 高テンション期間をハイライト
+    high_tension_threshold = np.percentile(features.rho_T, 90)
+    high_tension = features.rho_T > high_tension_threshold
+    if np.any(high_tension):
+        ax2.fill_between(time, 0, features.rho_T, where=high_tension,
+                        color='red', alpha=0.3, label='High Tension')
+    
+    ax2.set_xlabel('Time Step', fontsize=12)
+    ax2.set_ylabel('ρT', fontsize=12)
+    ax2.legend(fontsize=10)
+    ax2.grid(axis='y', linestyle=':', alpha=0.7)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=config.dpi, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
 # ===============================
 # Analysis Results Visualization
 # ===============================
-
 def plot_analysis_results(
     results: AnalysisResult,
     features_a: Lambda3FeatureSet,
@@ -180,7 +228,7 @@ def plot_analysis_results(
     config: Optional[PlottingConfig] = None
 ) -> None:
     """
-    Plot comprehensive analysis results for a series pair.
+    Plot comprehensive analysis results for a series pair (PyMC style).
     
     Args:
         results: Analysis results
@@ -194,84 +242,189 @@ def plot_analysis_results(
     if config is None:
         config = PlottingConfig()
     
-    plt.style.use(config.style)
-    
-    # Create figure with subplots
-    fig = plt.figure(figsize=(16, 12))
-    gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
-    
     # Get series names
     name_a, name_b = results.series_names
     
-    # 1. Data with predictions (top row)
-    ax1 = fig.add_subplot(gs[0, :])
-    _plot_data_with_predictions(ax1, features_a, results.trace_a, name_a)
+    # 1. メインの予測プロット（PyMCスタイル）
+    print(f"\nPlotting predictions for {name_a} and {name_b}...")
     
-    ax2 = fig.add_subplot(gs[1, :], sharex=ax1)
-    _plot_data_with_predictions(ax2, features_b, results.trace_b, name_b)
+    # 予測データの準備
+    data_dict = {name_a: features_a.data, name_b: features_b.data}
+    features_dict = {name_a: features_a, name_b: features_b}
     
-    # 2. Synchronization profile (bottom left)
-    ax3 = fig.add_subplot(gs[2, 0])
-    _plot_sync_profile(ax3, results.sync_profile)
+    # 予測値の抽出
+    mu_pred_dict = {}
+    if results.trace_a and hasattr(results.trace_a, 'predictions'):
+        mu_pred_dict[name_a] = results.trace_a.predictions
+    else:
+        mu_pred_dict[name_a] = features_a.data  # フォールバック
+        
+    if results.trace_b and hasattr(results.trace_b, 'predictions'):
+        mu_pred_dict[name_b] = results.trace_b.predictions
+    else:
+        mu_pred_dict[name_b] = features_b.data  # フォールバック
     
-    # 3. Interaction effects (bottom middle)
-    ax4 = fig.add_subplot(gs[2, 1])
-    _plot_interaction_effects(ax4, results.interaction_effects, name_a, name_b)
+    # PyMCスタイルのデュアルプロット
+    plot_l3_prediction_dual(
+        data_dict,
+        mu_pred_dict,
+        features_dict,
+        series_names=[name_a, name_b],
+        titles=[f"{name_a}: Fit + Events", f"{name_b}: Fit + Events"]
+    )
     
-    # 4. Causality profiles (bottom right)
-    ax5 = fig.add_subplot(gs[2, 2])
+    # 2. 解析結果のサマリープロット（別の図として）
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    # 同期プロファイル（左上）
+    ax = axes[0, 0]
+    _plot_sync_profile(ax, results.sync_profile)
+    ax.set_title('Synchronization Profile (σₛ)', fontsize=14)
+    
+    # 相互作用効果（右上）
+    ax = axes[0, 1]
+    _plot_interaction_effects(ax, results.interaction_effects, name_a, name_b)
+    ax.set_title('Interaction Effects (β)', fontsize=14)
+    
+    # 因果関係プロファイル（左下）
+    ax = axes[1, 0]
     if results.causality_profiles:
-        _plot_causality_profiles(ax5, results.causality_profiles)
+        _plot_causality_profiles(ax, results.causality_profiles)
+        ax.set_title('Causality Profiles', fontsize=14)
+    else:
+        ax.text(0.5, 0.5, 'No causality analysis performed',
+                ha='center', va='center', transform=ax.transAxes)
+        ax.set_title('Causality Profiles', fontsize=14)
     
-    # Overall title
-    fig.suptitle(f'Lambda³ Analysis: {name_a} ↔ {name_b}', fontsize=16)
+    # サマリー統計（右下）
+    ax = axes[1, 1]
+    ax.axis('off')
     
-    # Save or show
+    # 主要な統計情報を表示
+    summary_text = f"""Analysis Summary: {name_a} ↔ {name_b}
+    
+Synchronization:
+  Max sync rate (σₛ): {results.sync_profile.max_sync_rate:.3f}
+  Optimal lag: {results.sync_profile.optimal_lag} steps
+
+Events:
+  {name_a}: {features_a.n_pos_jumps} pos, {features_a.n_neg_jumps} neg jumps
+  {name_b}: {features_b.n_pos_jumps} pos, {features_b.n_neg_jumps} neg jumps
+
+Tension (ρT):
+  {name_a}: mean = {features_a.mean_tension:.3f}
+  {name_b}: mean = {features_b.mean_tension:.3f}
+"""
+    
+    # 相互作用効果の追加
+    if results.interaction_effects:
+        significant_effects = [(k, v) for k, v in results.interaction_effects.items() 
+                              if abs(v) > 0.1]
+        if significant_effects:
+            summary_text += "\nSignificant Interactions:"
+            for key, value in significant_effects[:3]:  # Top 3
+                summary_text += f"\n  {key}: β = {value:.3f}"
+    
+    ax.text(0.05, 0.95, summary_text, transform=ax.transAxes,
+            verticalalignment='top', fontfamily='monospace',
+            fontsize=11, bbox=dict(boxstyle='round,pad=0.5', 
+                                 facecolor='wheat', alpha=0.8))
+    
+    plt.suptitle(f'Lambda³ Analysis Results: {name_a} ↔ {name_b}', fontsize=16)
+    plt.tight_layout()
+    
+    # 保存処理
     if save_path:
+        # 両方の図を保存
+        base_path = Path(save_path)
+        
+        # 予測プロット
+        pred_path = base_path.parent / f"{base_path.stem}_predictions{base_path.suffix}"
+        plt.figure(1)  # 最初の図を選択
+        plt.savefig(pred_path, dpi=config.dpi, bbox_inches='tight')
+        
+        # サマリープロット
+        plt.figure(2)  # 2番目の図を選択
         plt.savefig(save_path, dpi=config.dpi, bbox_inches='tight')
-        plt.close()
+        
+        plt.close('all')
+        print(f"Saved plots to {pred_path} and {save_path}")
     else:
         plt.show()
 
-
-def _plot_data_with_predictions(
-    ax: Any,
-    features: Lambda3FeatureSet,
-    bayes_results: Any,
-    name: str
+def plot_l3_prediction_dual(
+    data_dict: Dict[str, np.ndarray],
+    mu_pred_dict: Dict[str, np.ndarray],
+    features_dict: Dict[str, Lambda3FeatureSet],
+    series_names: Optional[List[str]] = None,
+    titles: Optional[List[str]] = None
 ) -> None:
-    """Plot data with model predictions and events."""
-    time = np.arange(len(features.data))
+    """
+    Lambda³予測結果のデュアル表示（PyMC/lambda3_abc.py スタイル）
+    """
+    if series_names is None:
+        series_names = list(data_dict.keys())
     
-    # Plot data
-    ax.plot(time, features.data, 'o', color='gray', markersize=3, 
-            alpha=0.5, label='Data')
+    n_series = len(series_names)
+    fig, axes = plt.subplots(n_series, 1, figsize=(15, 5 * n_series), sharex=True)
     
-    # Plot predictions
-    if bayes_results and bayes_results.predictions is not None:
-        ax.plot(time, bayes_results.predictions, color='green', 
-                linewidth=2, label='Model')
+    if n_series == 1:
+        axes = [axes]
+    
+    for i, series in enumerate(series_names):
+        ax = axes[i]
+        data = data_dict[series]
+        mu_pred = mu_pred_dict[series]
+        features = features_dict[series]
         
-        # Confidence interval if available
-        if hasattr(bayes_results, 'prediction_interval'):
-            lower, upper = bayes_results.prediction_interval
-            ax.fill_between(time, lower, upper, color='green', alpha=0.2)
+        # データと予測をプロット
+        ax.plot(data, 'o', color='gray', markersize=4, alpha=0.6, label='Original Data')
+        ax.plot(mu_pred, color='C2', lw=2, label='Model Prediction')
+        
+        # ジャンプイベントを強調表示
+        # 正のジャンプ（青）
+        pos_jumps = features.delta_LambdaC_pos
+        pos_idx = np.where(pos_jumps > 0)[0]
+        if len(pos_idx) > 0:
+            ax.plot(pos_idx, data[pos_idx], 'o', color='dodgerblue',
+                   markersize=10, label='Positive ΔΛC')
+            for idx in pos_idx:
+                ax.axvline(x=idx, color='dodgerblue', linestyle='--', alpha=0.5)
+        
+        # 負のジャンプ（オレンジ）
+        neg_jumps = features.delta_LambdaC_neg
+        neg_idx = np.where(neg_jumps > 0)[0]
+        if len(neg_idx) > 0:
+            ax.plot(neg_idx, data[neg_idx], 'o', color='orange',
+                   markersize=10, label='Negative ΔΛC')
+            for idx in neg_idx:
+                ax.axvline(x=idx, color='orange', linestyle='-.', alpha=0.5)
+        
+        # ローカルジャンプ（マゼンタ）
+        local_jumps = features.local_jump
+        local_idx = np.where(local_jumps > 0)[0]
+        if len(local_idx) > 0:
+            # グローバルジャンプと重複しないものだけ表示
+            global_jumps = set(pos_idx) | set(neg_idx)
+            local_only = [idx for idx in local_idx if idx not in global_jumps]
+            if local_only:
+                ax.plot(local_only, data[local_only], 'o', color='magenta',
+                       markersize=7, alpha=0.7, label='Local Jump')
+        
+        # フォーマット
+        plot_title = titles[i] if titles and i < len(titles) else f"{series}: Fit + Events"
+        ax.set_title(plot_title, fontsize=16)
+        ax.set_xlabel('Time Step', fontsize=12)
+        ax.set_ylabel('Value', fontsize=12)
+        
+        # 凡例の整理
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        ax.legend(by_label.values(), by_label.keys(), fontsize=12)
+        
+        ax.grid(axis='y', linestyle=':', alpha=0.7)
     
-    # Mark events
-    pos_idx = np.where(features.delta_LambdaC_pos > 0)[0]
-    neg_idx = np.where(features.delta_LambdaC_neg > 0)[0]
-    
-    for idx in pos_idx:
-        ax.axvline(x=idx, color='dodgerblue', linestyle='--', alpha=0.3)
-    
-    for idx in neg_idx:
-        ax.axvline(x=idx, color='orangered', linestyle='--', alpha=0.3)
-    
-    ax.set_ylabel(name)
-    ax.legend(loc='upper right', fontsize=8)
-    ax.grid(True, alpha=0.3)
-    ax.set_title(f'{name}: Data, Model Fit, and Events')
-
+    plt.tight_layout()
 
 def _plot_sync_profile(ax: Any, sync_profile: SyncProfile) -> None:
     """Plot synchronization profile."""
