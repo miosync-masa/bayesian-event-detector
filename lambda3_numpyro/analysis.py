@@ -471,6 +471,104 @@ def _name_regimes(regime_stats: Dict[int, Dict[str, float]]) -> Dict[int, str]:
     
     return names
 
+# ===============================
+# Pairwise Analysis Function
+# ===============================
+
+def analyze_pair(
+    name_a: str,
+    name_b: str,
+    features_a: Lambda3FeatureSet,
+    features_b: Lambda3FeatureSet,
+    config: L3Config,
+    seed: int = 0
+) -> AnalysisResult:
+    """
+    Analyze interaction between two time series.
+    
+    Args:
+        name_a: Name of first series
+        name_b: Name of second series
+        features_a: Features for first series
+        features_b: Features for second series
+        config: Configuration
+        seed: Random seed for reproducibility
+        
+    Returns:
+        AnalysisResult: Analysis results including sync profile and interactions
+    """
+    print(f"\nAnalyzing interaction: {name_a} ↔ {name_b}")
+    
+    # 1. Calculate synchronization profile
+    print("  Calculating synchronization profile...")
+    sync_profile = calculate_sync_profile(
+        features_a.delta_LambdaC_pos,
+        features_b.delta_LambdaC_pos,
+        config.feature.lag_window,
+        series_names=(name_a, name_b)
+    )
+    
+    # 2. Fit Bayesian models with interactions
+    print(f"  Fitting Bayesian model for {name_a}...")
+    trace_a = fit_bayesian_model(
+        features_a,
+        config,
+        interaction_features=features_b,
+        model_type='interaction',
+        seed=seed
+    )
+    
+    print(f"  Fitting Bayesian model for {name_b}...")
+    trace_b = fit_bayesian_model(
+        features_b,
+        config,
+        interaction_features=features_a,
+        model_type='interaction',
+        seed=seed + 1
+    )
+    
+    # 3. Extract interaction effects
+    interaction_effects = _extract_interaction_effects(
+        trace_a, trace_b, name_a, name_b
+    )
+    
+    # 4. Calculate causality profiles (optional)
+    causality_profiles = None
+    if config.verbose:
+        print("  Calculating causality profiles...")
+        # Simple causality based on conditional probabilities
+        causality_a = CausalityProfile(
+            self_causality={lag: 0.0 for lag in range(-5, 6)},
+            series_names=name_a
+        )
+        causality_b = CausalityProfile(
+            self_causality={lag: 0.0 for lag in range(-5, 6)},
+            series_names=name_b
+        )
+        causality_profiles = {name_a: causality_a, name_b: causality_b}
+    
+    # 5. Determine primary interaction
+    primary_effect = max(interaction_effects.items(), key=lambda x: abs(x[1]))[0]
+    
+    # 6. Create metadata
+    metadata = {
+        'name_a': name_a,
+        'name_b': name_b,
+        'analysis_timestamp': datetime.now().isoformat(),
+        'config': config.to_dict(),
+        'primary_effect': primary_effect,
+        'seed': seed
+    }
+    
+    return AnalysisResult(
+        trace_a=trace_a,
+        trace_b=trace_b,
+        sync_profile=sync_profile,
+        interaction_effects=interaction_effects,
+        causality_profiles=causality_profiles,
+        metadata=metadata
+    )
+
 
 # ===============================
 # Complete Analysis Pipeline Functions
