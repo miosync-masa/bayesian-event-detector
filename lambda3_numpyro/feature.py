@@ -108,14 +108,14 @@ def calculate_rho_t(data: np.ndarray, window: int) -> np.ndarray:
     JIT-compiled tension scalar (ρT) calculation.
     
     The tension scalar measures local volatility/stress in the time series,
-    representing the structural tension at each point.
+    representing the structural tension at each point in Lambda³ theory.
     
     Args:
         data: Time series data
         window: Window size for calculation
         
     Returns:
-        rho_t: Tension scalar values
+        rho_t: Tension scalar values (ρT)
     """
     n = len(data)
     rho_t = np.empty(n)
@@ -140,13 +140,15 @@ def sync_rate_at_lag(series_a: np.ndarray, series_b: np.ndarray, lag: int) -> fl
     """
     JIT-compiled synchronization rate calculation for a specific lag.
     
+    Computes σₛ (synchronization rate) in Lambda³ theory.
+    
     Args:
         series_a: First series (binary events)
         series_b: Second series (binary events)
         lag: Time lag (positive = b leads a, negative = a leads b)
         
     Returns:
-        sync_rate: Synchronization rate at given lag
+        sync_rate: Synchronization rate (σₛ) at given lag
     """
     if lag < 0:
         # A leads B
@@ -181,7 +183,7 @@ def calculate_sync_profile_jit(
         
     Returns:
         lags: Array of lag values
-        sync_values: Synchronization rate at each lag
+        sync_values: Synchronization rate (σₛ) at each lag
         max_sync: Maximum synchronization rate
         optimal_lag: Lag with maximum synchronization
     """
@@ -209,6 +211,8 @@ def calculate_sync_profile_jit(
 def calculate_local_jumps(diff: np.ndarray, local_std: np.ndarray, percentile: float) -> np.ndarray:
     """
     Detect local jumps using normalized score.
+    
+    Local jumps represent localized ΔΛC pulsations in Lambda³ theory.
     
     Args:
         diff: First differences
@@ -238,10 +242,10 @@ def extract_lambda3_features(
     Extract Lambda³ features from time series data.
     
     This function computes:
-    - Jump events (ΔΛC+ and ΔΛC-)
-    - Tension scalar (ρT)
-    - Local jump detections
-    - Time trend
+    - Jump events (ΔΛC±: structural changes)
+    - Tension scalar (ρT: local volatility)
+    - Local jump detections (localized ΔΛC pulsations)
+    - Time trend (ΛF: progression vector)
     
     Args:
         data: Time series data
@@ -267,26 +271,33 @@ def extract_lambda3_features(
     # Calculate differences and threshold
     diff, threshold = calculate_diff_and_threshold(data, feat_config.delta_percentile)
     
-    # Detect jumps
+    # Detect jumps (ΔΛC±)
     delta_pos, delta_neg = detect_jumps(diff, threshold)
     
     # Calculate local standard deviation
     local_std = calculate_local_std(data, feat_config.local_window)
     
-    # Detect local jumps
+    # Detect local jumps (localized ΔΛC pulsations)
     local_jumps = calculate_local_jumps(diff, local_std, feat_config.local_jump_percentile)
     
-    # Calculate tension scalar
+    # Calculate tension scalar (ρT)
     rho_t = calculate_rho_t(data, feat_config.window)
     
-    # Simple linear time trend
+    # Simple linear time trend (ΛF: progression vector)
     time_trend = np.arange(len(data), dtype=np.float64)
     
-    # Create metadata
+    # Create metadata with Lambda³ annotations
     metadata = {
         'series_name': series_name,
         'length': len(data),
-        'config': feat_config.__dict__
+        'config': feat_config.__dict__,
+        'lambda3_components': {
+            'delta_LambdaC_pos': 'ΔΛC⁺ - positive structural jumps',
+            'delta_LambdaC_neg': 'ΔΛC⁻ - negative structural jumps',
+            'rho_T': 'ρT - tension scalar (local volatility)',
+            'time_trend': 'ΛF - progression vector',
+            'local_jump': 'Localized ΔΛC pulsations'
+        }
     }
     
     return Lambda3FeatureSet(
@@ -320,16 +331,16 @@ def extract_features_dict(
     
     for i, (name, data) in enumerate(series_dict.items(), 1):
         if show_progress:
-            print(f"[{i}/{len(series_dict)}] Extracting features for {name}...")
+            print(f"[{i}/{len(series_dict)}] Extracting Lambda³ features for {name}...")
         
         try:
             features[name] = extract_lambda3_features(data, config, series_name=name)
             if show_progress:
                 feats = features[name]
                 print(f"  ✓ Length: {feats.length}, "
-                      f"Pos jumps: {feats.n_pos_jumps}, "
-                      f"Neg jumps: {feats.n_neg_jumps}, "
-                      f"Mean tension: {feats.mean_tension:.3f}")
+                      f"ΔΛC⁺: {feats.n_pos_jumps}, "
+                      f"ΔΛC⁻: {feats.n_neg_jumps}, "
+                      f"Mean ρT: {feats.mean_tension:.3f}")
         except Exception as e:
             print(f"  ✗ Error extracting features for {name}: {e}")
             continue
@@ -349,6 +360,8 @@ def calculate_sync_profile(
 ) -> SyncProfile:
     """
     Calculate synchronization profile between two event series.
+    
+    Computes σₛ (synchronization rate) profile in Lambda³ theory.
     
     Args:
         series_a: First event series (binary)
@@ -386,7 +399,7 @@ def calculate_dynamic_sync(
     lag_window: int = 10
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Calculate time-varying synchronization rate.
+    Calculate time-varying synchronization rate (dynamic σₛ).
     
     Args:
         series_a: First event series
@@ -432,7 +445,7 @@ def sync_matrix(
     features_dict: Optional[Dict[str, Lambda3FeatureSet]] = None
 ) -> Tuple[np.ndarray, List[str]]:
     """
-    Create synchronization rate matrix for all series pairs.
+    Create synchronization rate matrix (σₛ matrix) for all series pairs.
     
     Args:
         event_series_dict: Dictionary of event series
@@ -440,7 +453,7 @@ def sync_matrix(
         features_dict: Optional pre-computed features
         
     Returns:
-        sync_mat: N×N synchronization matrix
+        sync_mat: N×N synchronization matrix (σₛ matrix)
         series_names: List of series names
     """
     series_names = list(event_series_dict.keys())
@@ -475,6 +488,8 @@ def build_sync_network(
     """
     Build directed synchronization network from features.
     
+    Creates a network where edges represent significant synchronization (σₛ > threshold).
+    
     Args:
         features_dict: Dictionary of Lambda³ features
         lag_window: Maximum lag for synchronization
@@ -493,7 +508,12 @@ def build_sync_network(
             name,
             n_pos_jumps=features.n_pos_jumps,
             n_neg_jumps=features.n_neg_jumps,
-            mean_tension=features.mean_tension
+            mean_tension=features.mean_tension,
+            lambda3_stats={
+                'ΔΛC⁺': features.n_pos_jumps,
+                'ΔΛC⁻': features.n_neg_jumps,
+                'mean_ρT': features.mean_tension
+            }
         )
     
     # Add edges based on synchronization
@@ -527,15 +547,17 @@ def build_sync_network(
                     name_a, name_b,
                     weight=profile.max_sync_rate,
                     lag=profile.optimal_lag,
-                    sync_profile=profile
+                    sync_profile=profile,
+                    sigma_s=profile.max_sync_rate  # σₛ annotation
                 )
                 edge_count += 1
     
-    # Add graph attributes
+    # Add graph attributes with Lambda³ annotations
     G.graph['sync_threshold'] = sync_threshold
     G.graph['lag_window'] = lag_window
     G.graph['event_type'] = event_type
     G.graph['n_edges'] = edge_count
+    G.graph['lambda3_description'] = f'Synchronization network (σₛ > {sync_threshold})'
     
     return G
 
@@ -551,6 +573,8 @@ def extract_multiscale_features(
 ) -> Dict[int, Lambda3FeatureSet]:
     """
     Extract Lambda³ features at multiple time scales.
+    
+    Multi-scale analysis reveals scale-dependent structural patterns in Λ.
     
     Args:
         data: Original time series
@@ -578,6 +602,7 @@ def extract_multiscale_features(
         # Extract features at this scale
         features = extract_lambda3_features(data, scale_config)
         features.metadata['scale'] = scale
+        features.metadata['scale_description'] = f'Lambda³ features at scale τ={scale}'
         multiscale_features[scale] = features
     
     return multiscale_features
@@ -590,6 +615,8 @@ def detect_scale_breaks(
     """
     Detect scale-dependent structural breaks.
     
+    Identifies scale-specific ΔΛC singularities based on ρT outliers.
+    
     Args:
         multiscale_features: Features at different scales
         threshold_std: Number of standard deviations for break detection
@@ -600,7 +627,7 @@ def detect_scale_breaks(
     scale_breaks = {}
     
     for scale, features in multiscale_features.items():
-        # Use tension scalar for break detection
+        # Use tension scalar (ρT) for break detection
         rho_t = features.rho_T
         
         # Detect outliers in tension
@@ -608,7 +635,7 @@ def detect_scale_breaks(
         std_tension = np.std(rho_t)
         threshold = mean_tension + threshold_std * std_tension
         
-        # Find break points
+        # Find break points (ρT singularities)
         breaks = np.where(rho_t > threshold)[0]
         
         # Filter consecutive breaks (keep first)
