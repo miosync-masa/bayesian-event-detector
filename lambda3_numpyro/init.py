@@ -32,6 +32,7 @@ from .types import (
 # Feature extraction
 from .feature import (
     extract_lambda3_features,
+    extract_features_dict,
     calculate_sync_profile,
     calculate_dynamic_sync,
     build_sync_network,
@@ -91,6 +92,7 @@ __all__ = [
     
     # Features
     "extract_lambda3_features",
+    "extract_features_dict",
     "calculate_sync_profile",
     "calculate_dynamic_sync",
     "build_sync_network",
