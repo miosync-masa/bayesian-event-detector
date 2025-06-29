@@ -273,7 +273,8 @@ def save_features(
         data = {
             'single': True,
             'features': features.to_dict(),
-            'metadata': features.metadata
+            'metadata': features.metadata,
+            'lambda3_summary': features.get_lambda3_summary()
         }
     else:
         data = {
@@ -281,15 +282,17 @@ def save_features(
             'features': {
                 name: {
                     'data': feat.to_dict(),
-                    'metadata': feat.metadata
+                    'metadata': feat.metadata,
+                    'lambda3_summary': feat.get_lambda3_summary()
                 }
                 for name, feat in features.items()
             }
         }
     
-    # Add timestamp
+    # Add timestamp and version
     data['saved_at'] = datetime.now().isoformat()
     data['version'] = '1.0.0'
+    data['lambda3_framework'] = True
     
     # Save
     if cloud_config and cloud_config.provider != 'local':
@@ -344,6 +347,8 @@ def load_features(
                 data = pickle.load(f)
     
     print(f"Loaded features saved at {data.get('saved_at', 'unknown')}")
+    if data.get('lambda3_framework'):
+        print("✓ Lambda³ framework features detected")
     
     # Convert back to Lambda3FeatureSet
     if data['single']:
@@ -384,19 +389,22 @@ def save_analysis_results(
     """
     filepath = Path(filepath)
     
-    # Prepare data
+    # Prepare data with Lambda³ annotations
     data = {
         'type': type(results).__name__,
         'saved_at': datetime.now().isoformat(),
-        'version': '1.0.0'
+        'version': '1.0.0',
+        'lambda3_framework': True
     }
     
     if isinstance(results, AnalysisResult):
         # Single pair analysis
         data['results'] = _serialize_analysis_result(results, include_traces)
+        data['lambda3_summary'] = results.get_lambda3_summary()
     else:
         # Cross analysis
         data['results'] = _serialize_cross_analysis_result(results, include_traces)
+        data['lambda3_summary'] = results.get_lambda3_network_summary()
     
     # Save
     if cloud_config and cloud_config.provider != 'local':
@@ -432,6 +440,8 @@ def load_analysis_results(
             data = pickle.load(f)
     
     print(f"Loaded {data['type']} results saved at {data.get('saved_at', 'unknown')}")
+    if data.get('lambda3_framework'):
+        print("✓ Lambda³ framework analysis detected")
     
     # Deserialize based on type
     if data['type'] == 'AnalysisResult':
@@ -684,6 +694,10 @@ def _serialize_analysis_result(result: AnalysisResult, include_traces: bool) -> 
         data['trace_b_summary'] = result.trace_b.summary.to_dict()
         data['predictions_a'] = result.trace_a.predictions.tolist()
         data['predictions_b'] = result.trace_b.predictions.tolist()
+        
+        # Include Lambda³ parameters
+        data['lambda3_params_a'] = result.trace_a.get_lambda3_parameters()
+        data['lambda3_params_b'] = result.trace_b.get_lambda3_parameters()
     
     # Causality profiles
     if result.causality_profiles:
@@ -770,6 +784,10 @@ def _serialize_cross_analysis_result(result: CrossAnalysisResult, include_traces
         'metadata': result.metadata
     }
     
+    # Include interaction tensor if available
+    if result.get_interaction_tensor() is not None:
+        data['interaction_tensor'] = result.get_interaction_tensor().tolist()
+    
     # Serialize pairwise results
     data['pairwise_results'] = {}
     for pair_key, pair_result in result.pairwise_results.items():
@@ -787,10 +805,12 @@ def _serialize_cross_analysis_result(result: CrossAnalysisResult, include_traces
                     'source': u,
                     'target': v,
                     'weight': d.get('weight', 1.0),
-                    'lag': d.get('lag', 0)
+                    'lag': d.get('lag', 0),
+                    'sigma_s': d.get('sigma_s', d.get('weight', 1.0))
                 }
                 for u, v, d in result.network.edges(data=True)
-            ]
+            ],
+            'graph_attrs': result.network.graph
         }
     
     # Clusters
@@ -822,8 +842,17 @@ def _deserialize_cross_analysis_result(data: Dict) -> CrossAnalysisResult:
                 edge['source'],
                 edge['target'],
                 weight=edge['weight'],
-                lag=edge['lag']
+                lag=edge['lag'],
+                sigma_s=edge.get('sigma_s', edge['weight'])
             )
+        # Restore graph attributes
+        if 'graph_attrs' in data['network']:
+            network.graph.update(data['network']['graph_attrs'])
+    
+    # Reconstruct metadata with tensor if available
+    metadata = data['metadata'].copy()
+    if 'interaction_tensor' in data:
+        metadata['interaction_tensor'] = np.array(data['interaction_tensor'])
     
     return CrossAnalysisResult(
         pairwise_results=pairwise_results,
@@ -831,12 +860,12 @@ def _deserialize_cross_analysis_result(data: Dict) -> CrossAnalysisResult:
         interaction_matrix=np.array(data['interaction_matrix']),
         network=network,
         clusters=data.get('clusters'),
-        metadata=data['metadata']
+        metadata=metadata
     )
 
 
 # ===============================
-# Utility Functions
+# Export Functions
 # ===============================
 
 def export_results_to_excel(
@@ -845,7 +874,7 @@ def export_results_to_excel(
     include_plots: bool = True
 ) -> None:
     """
-    Export analysis results to Excel workbook.
+    Export analysis results to Excel workbook with Lambda³ annotations.
     
     Args:
         results: Analysis results
@@ -855,6 +884,30 @@ def export_results_to_excel(
     filepath = Path(filepath)
     
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+        # Add Lambda³ theory sheet
+        theory_data = {
+            'Symbol': ['Λ', 'ΔΛC⁺', 'ΔΛC⁻', 'ρT', 'ΛF', 'σₛ', 'β'],
+            'Component': [
+                'Structural tensor',
+                'Positive jump events',
+                'Negative jump events',
+                'Tension scalar',
+                'Progression vector',
+                'Synchronization rate',
+                'Interaction coefficient'
+            ],
+            'Description': [
+                'Complete structural state',
+                'Upward structural changes',
+                'Downward structural changes',
+                'Local volatility/stress',
+                'Time evolution component',
+                'Cross-series synchronization',
+                'Structural coupling strength'
+            ]
+        }
+        pd.DataFrame(theory_data).to_excel(writer, sheet_name='Lambda³ Theory', index=False)
+        
         if isinstance(results, AnalysisResult):
             _export_single_result_to_excel(results, writer, include_plots)
         else:
@@ -869,13 +922,14 @@ def _export_single_result_to_excel(
     include_plots: bool
 ) -> None:
     """Export single analysis result to Excel."""
-    # Summary sheet
+    # Summary sheet with Lambda³ notation
     summary_data = {
-        'Metric': ['Max Sync Rate', 'Optimal Lag', 'Primary Interaction'],
+        'Metric': ['Max Sync Rate (σₛ)', 'Optimal Lag', 'Primary Interaction', 'Convergence'],
         'Value': [
-            result.sync_profile.max_sync_rate,
-            result.sync_profile.optimal_lag,
-            str(result.primary_interaction)
+            f"{result.sync_profile.max_sync_rate:.3f}",
+            str(result.sync_profile.optimal_lag),
+            f"{result.primary_interaction[0]}: {result.primary_interaction[1]:.3f}",
+            'Both converged' if result.trace_a.converged and result.trace_b.converged else 'Not converged'
         ]
     }
     pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
@@ -883,22 +937,52 @@ def _export_single_result_to_excel(
     # Sync profile sheet
     sync_df = pd.DataFrame(
         list(result.sync_profile.profile.items()),
-        columns=['Lag', 'Sync Rate']
+        columns=['Lag', 'Sync Rate (σₛ)']
     )
     sync_df.to_excel(writer, sheet_name='Sync Profile', index=False)
     
-    # Interaction effects
+    # Interaction effects with Lambda³ notation
     if result.interaction_effects:
-        effects_df = pd.DataFrame(
-            list(result.interaction_effects.items()),
-            columns=['Effect', 'Coefficient']
-        )
+        effects_data = []
+        for effect, coefficient in result.interaction_effects.items():
+            # Parse effect type
+            if '_pos' in effect:
+                lambda_type = 'ΔΛC⁺'
+            elif '_neg' in effect:
+                lambda_type = 'ΔΛC⁻'
+            elif '_stress' in effect:
+                lambda_type = 'ρT'
+            else:
+                lambda_type = 'Unknown'
+            
+            effects_data.append({
+                'Effect': effect,
+                'Type': lambda_type,
+                'Coefficient (β)': coefficient,
+                'Significant': '✓' if abs(coefficient) > 0.1 else ''
+            })
+        
+        effects_df = pd.DataFrame(effects_data)
         effects_df.to_excel(writer, sheet_name='Interactions', index=False)
     
-    # Model summaries
+    # Model summaries with Lambda³ parameters
     if result.trace_a.summary is not None and not result.trace_a.summary.empty:
-        result.trace_a.summary.to_excel(writer, sheet_name='Model A Summary')
-        result.trace_b.summary.to_excel(writer, sheet_name='Model B Summary')
+        # Add Lambda³ parameter mapping
+        param_mapping = {
+            'beta_dLC_pos': 'β_ΔΛC⁺',
+            'beta_dLC_neg': 'β_ΔΛC⁻',
+            'beta_rhoT': 'β_ρT',
+            'beta_time': 'β_ΛF',
+            'beta_local_jump': 'β_local_ΔΛC'
+        }
+        
+        summary_a = result.trace_a.summary.copy()
+        summary_a['Lambda³ Parameter'] = summary_a.index.map(lambda x: param_mapping.get(x, x))
+        summary_a.to_excel(writer, sheet_name='Model A Summary')
+        
+        summary_b = result.trace_b.summary.copy()
+        summary_b['Lambda³ Parameter'] = summary_b.index.map(lambda x: param_mapping.get(x, x))
+        summary_b.to_excel(writer, sheet_name='Model B Summary')
 
 
 def _export_cross_result_to_excel(
@@ -906,36 +990,56 @@ def _export_cross_result_to_excel(
     writer: pd.ExcelWriter,
     include_plots: bool
 ) -> None:
-    """Export cross analysis result to Excel."""
+    """Export cross analysis result to Excel with Lambda³ annotations."""
     series_names = result.get_series_names()
     
     # Summary sheet
     summary_data = {
-        'Metric': ['Number of Series', 'Number of Pairs', 'Network Density'],
+        'Metric': [
+            'Number of Series', 
+            'Number of Pairs', 
+            'Network Density',
+            'Max Sync Rate (σₛ)',
+            'Mean Sync Rate (σₛ)'
+        ],
         'Value': [
             result.n_series,
             result.n_pairs,
-            result.network.number_of_edges() / (result.n_series * (result.n_series - 1))
-            if result.network else 0
+            f"{result.network_density:.1%}",
+            f"{result.get_strongest_sync_pair()[2]:.3f}",
+            f"{np.mean(result.sync_matrix[np.triu_indices_from(result.sync_matrix, k=1)]):.3f}"
         ]
     }
     pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
     
-    # Sync matrix
+    # Sync matrix (σₛ matrix)
     sync_df = pd.DataFrame(
         result.sync_matrix,
         index=series_names,
         columns=series_names
     )
-    sync_df.to_excel(writer, sheet_name='Sync Matrix')
+    sync_df.to_excel(writer, sheet_name='Sync Matrix (σₛ)')
     
-    # Interaction matrix
+    # Interaction matrix (β matrix)
     int_df = pd.DataFrame(
         result.interaction_matrix,
         index=series_names,
         columns=series_names
     )
-    int_df.to_excel(writer, sheet_name='Interaction Matrix')
+    int_df.to_excel(writer, sheet_name='Interaction Matrix (β)')
+    
+    # Interaction tensor if available
+    if result.get_interaction_tensor() is not None:
+        tensor = result.get_interaction_tensor()
+        # Export each slice
+        effect_types = ['ΔΛC⁺', 'ΔΛC⁻', 'ρT']
+        for i, effect_type in enumerate(effect_types):
+            tensor_df = pd.DataFrame(
+                tensor[:, :, i],
+                index=series_names,
+                columns=series_names
+            )
+            tensor_df.to_excel(writer, sheet_name=f'β Tensor - {effect_type}')
     
     # Network edges
     if result.network:
@@ -944,8 +1048,9 @@ def _export_cross_result_to_excel(
             edges_data.append({
                 'From': u,
                 'To': v,
-                'Weight': d.get('weight', 1.0),
-                'Lag': d.get('lag', 0)
+                'Weight (σₛ)': d.get('weight', 1.0),
+                'Lag': d.get('lag', 0),
+                'Strength': 'Strong' if d.get('weight', 0) > 0.5 else 'Moderate'
             })
         if edges_data:
             pd.DataFrame(edges_data).to_excel(writer, sheet_name='Network Edges', index=False)
@@ -957,3 +1062,4 @@ def _export_cross_result_to_excel(
             columns=['Series', 'Cluster']
         )
         cluster_df.to_excel(writer, sheet_name='Clusters', index=False)
+        
