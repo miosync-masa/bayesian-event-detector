@@ -14,15 +14,10 @@ from numpyro.infer import MCMC, NUTS, Predictive, SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoNormal
 import arviz as az
 import numpy as np
-from scipy.stats import norm
 from typing import Dict, Optional, Any, List, Tuple, Union
 
 from .config import L3Config, BayesianConfig
 from .types import Lambda3FeatureSet, BayesianResults
-
-# Enable JAX 64-bit computation for precision
-jax.config.update("jax_enable_x64", True)
-
 
 # ===============================
 # NumPyro Model Definitions
@@ -841,6 +836,8 @@ def calculate_log_likelihood(
     Returns:
         Log likelihood array
     """
+    from scipy.stats import norm
+    
     trace = results.trace
     posterior = trace.posterior
     
