@@ -1080,7 +1080,6 @@ def fit_svi_model(
 # ===============================
 # Complete Bayesian Analysis Pipeline
 # ===============================
-
 def run_complete_bayesian_analysis(
     features: Lambda3FeatureSet,
     config: Optional[L3Config] = None,
@@ -1093,10 +1092,11 @@ def run_complete_bayesian_analysis(
     
     This includes:
     1. Multiple model fitting
-    2. Model comparison
+    2. Model comparison (with LOO/WAIC)
     3. Posterior predictive checks
     4. Diagnostics
     5. Optional hierarchical analysis for multiple series
+    6. Optional SVI for fast inference
     
     Args:
         features: Lambda³ features
@@ -1115,70 +1115,72 @@ def run_complete_bayesian_analysis(
     print("COMPLETE BAYESIAN ANALYSIS PIPELINE")
     print("="*60)
     
-    all_results = {}
+    # Use the extended inference class
+    inference = Lambda3BayesianInference(config)
     
     # 1. Fit base model
     print("\n1. Fitting base model...")
-    base_results = fit_bayesian_model(
-        features, config, model_type='base', seed=100
-    )
-    all_results['base'] = base_results
-    check_convergence(base_results)
+    inference.fit_model(features, model_type='base', seed=100)
+    check_convergence(inference.results['base'])
     
     # 2. Fit dynamic model
     print("\n2. Fitting dynamic model...")
-    dynamic_results = fit_dynamic_model(
-        features, config, seed=200
-    )
-    all_results['dynamic'] = dynamic_results
-    check_convergence(dynamic_results)
+    inference.fit_model(features, model_type='dynamic', seed=200)
+    check_convergence(inference.results['dynamic'])
     
     # 3. Hierarchical model (if multiple series provided)
     if include_hierarchical and additional_series:
         print("\n3. Fitting hierarchical model...")
         all_series = [features] + additional_series
-        hierarchical_results = fit_hierarchical_model(
-            all_series, config, seed=300
-        )
-        all_results['hierarchical'] = hierarchical_results
-        check_convergence(hierarchical_results)
+        inference.fit_model(features, model_type='hierarchical', 
+                          features_list=all_series, seed=300)
+        check_convergence(inference.results['hierarchical'])
     
-    # 4. Model comparison
-    print("\n4. Comparing models...")
-    comparison_results = compare_models(all_results, features)
+    # 4. SVI analysis (optional)
+    if include_svi:
+        print("\n4. Running SVI for fast inference...")
+        inference.fit_model(features, model_type='svi', 
+                          n_steps=10000, seed=400)
     
-    # 5. Posterior predictive checks for best model
+    # 5. Model comparison with LOO
+    print("\n5. Comparing models (LOO-CV)...")
+    comparison_results = inference.compare_models(features, 
+                                                criterion='loo',
+                                                include_svi=include_svi)
+    
+    # 6. Posterior predictive checks for best model
     best_model = comparison_results.get('best_model', 'base')
-    print(f"\n5. Running PPC for best model: {best_model}")
-    ppc_results = posterior_predictive_check(
-        all_results[best_model], features
-    )
+    print(f"\n6. Running PPC for best model: {best_model}")
+    ppc_results = inference.run_ppc(features, model_name=best_model)
     
     print("\nBayesian p-values:")
     for stat, p_val in ppc_results['bayesian_p_values'].items():
         print(f"  {stat}: {p_val:.3f}")
     
-    # 6. SVI analysis (optional)
-    if include_svi:
-        print("\n6. Running SVI for fast inference...")
-        svi_results = fit_svi_model(features, config)
-        all_results['svi'] = svi_results
+    # 7. Get model weights
+    print("\n7. Computing model weights...")
+    weights = inference.get_model_weights(features)
+    print("Model weights:")
+    for model, weight in weights.items():
+        print(f"  {model}: {weight:.3f}")
     
     # Summary
     print("\n" + "="*60)
     print("ANALYSIS COMPLETE")
     print("="*60)
-    print(f"✓ Models fitted: {list(all_results.keys())}")
+    summary = inference.summary()
+    print(f"✓ Models fitted: {summary['models']}")
     print(f"✓ Best model (by LOO): {best_model}")
     print(f"✓ Posterior predictive checks: Complete")
+    if 'svi_info' in summary:
+        print(f"✓ SVI converged: {summary['svi_info']['converged']}")
     
     return {
-        'models': all_results,
-        'comparison': comparison_results,
+        'inference': inference,
+        'summary': summary,
         'best_model': best_model,
-        'ppc': ppc_results
+        'model_weights': weights
     }
-
 
 # ===============================
 # Extended Inference Class
@@ -1201,17 +1203,17 @@ class Lambda3BayesianInference:
         self.ppc_results = {}
         
     def fit_model(self, features: Lambda3FeatureSet, 
-                  model_type: str = 'base', **kwargs) -> BayesianResults:
+                  model_type: str = 'base', **kwargs) -> Union[BayesianResults, Dict[str, Any]]:
         """
         Fit a specific model type.
         
         Args:
             features: Lambda³ features
-            model_type: 'base', 'interaction', 'dynamic', or 'hierarchical'
+            model_type: 'base', 'interaction', 'dynamic', 'hierarchical', or 'svi'
             **kwargs: Additional model-specific arguments
             
         Returns:
-            BayesianResults
+            BayesianResults or SVI results dict
         """
         if model_type == 'base':
             results = fit_bayesian_model(features, self.config, model_type='base', **kwargs)
@@ -1222,6 +1224,17 @@ class Lambda3BayesianInference:
         elif model_type == 'hierarchical':
             features_list = kwargs.pop('features_list', [features])
             results = fit_hierarchical_model(features_list, self.config, **kwargs)
+        elif model_type == 'svi':
+            # SVI追加
+            n_steps = kwargs.pop('n_steps', 10000)
+            learning_rate = kwargs.pop('learning_rate', 0.01)
+            seed = kwargs.pop('seed', 0)
+            results = fit_svi_model(features, self.config, 
+                                  model_type='base',
+                                  n_steps=n_steps, 
+                                  learning_rate=learning_rate,
+                                  seed=seed)
+            print(f"SVI completed. Final loss: {results['losses'][-1]:.4f}")
         else:
             raise ValueError(f"Unknown model type: {model_type}")
         
@@ -1229,54 +1242,99 @@ class Lambda3BayesianInference:
         return results
     
     def compare_models(self, features: Lambda3FeatureSet, 
-                      criterion: str = 'loo') -> Dict[str, Any]:
+                      criterion: str = 'loo',
+                      include_svi: bool = False) -> Dict[str, Any]:
         """
-        Compare all fitted models.
+        Compare all fitted models using LOO-CV or WAIC.
         
         Args:
             features: Lambda³ features
             criterion: 'loo' or 'waic'
+            include_svi: Whether to include SVI in comparison (if available)
             
         Returns:
-            Comparison results
+            Comparison results with best model selection
         """
         if not self.results:
             raise ValueError("No models fitted yet")
         
+        # Filter models for comparison (exclude SVI for now)
+        models_to_compare = {
+            name: result for name, result in self.results.items()
+            if isinstance(result, BayesianResults)
+        }
+        
+        if not models_to_compare:
+            raise ValueError("No MCMC models available for comparison")
+        
+        # Run comparison with LOO/WAIC
         self.comparison_results = compare_models(
-            self.results, features, criterion
+            models_to_compare, features, criterion
         )
+        
+        # Add SVI information if requested
+        if include_svi and 'svi' in self.results:
+            svi_result = self.results['svi']
+            final_loss = svi_result['losses'][-1]
+            print(f"\nSVI Model Performance:")
+            print(f"  Final ELBO Loss: {final_loss:.4f}")
+            print(f"  Note: SVI uses ELBO, not directly comparable to {criterion.upper()}")
+            
+            # Store SVI info separately
+            self.comparison_results['svi_info'] = {
+                'final_loss': final_loss,
+                'n_steps': len(svi_result['losses'])
+            }
+        
         return self.comparison_results
     
     def run_ppc(self, features: Lambda3FeatureSet, 
-                model_name: Optional[str] = None) -> Dict[str, Any]:
+                model_name: Optional[str] = None,
+                n_samples: int = 500) -> Dict[str, Any]:
         """
         Run posterior predictive checks.
         
         Args:
             features: Lambda³ features
             model_name: Specific model to check (or best model)
+            n_samples: Number of posterior samples to use
             
         Returns:
-            PPC results
+            PPC results with Bayesian p-values
         """
         if model_name is None:
             if self.comparison_results and 'best_model' in self.comparison_results:
                 model_name = self.comparison_results['best_model']
             else:
-                model_name = list(self.results.keys())[0]
+                # Find first MCMC model
+                mcmc_models = [name for name, result in self.results.items()
+                             if isinstance(result, BayesianResults)]
+                if mcmc_models:
+                    model_name = mcmc_models[0]
+                else:
+                    raise ValueError("No MCMC models available for PPC")
         
         if model_name not in self.results:
             raise ValueError(f"Model '{model_name}' not found")
         
+        if model_name == 'svi':
+            print("Note: PPC for SVI uses point estimates from the guide")
+            # Special handling for SVI
+            # Convert SVI results to a format suitable for PPC
+            # This is a simplified version
+            return {
+                'model': 'svi',
+                'note': 'SVI PPC uses variational posterior approximation'
+            }
+        
         ppc_results = posterior_predictive_check(
-            self.results[model_name], features
+            self.results[model_name], features, n_samples=n_samples
         )
         self.ppc_results[model_name] = ppc_results
         
         return ppc_results
     
-    def get_best_model(self) -> Tuple[str, BayesianResults]:
+    def get_best_model(self) -> Tuple[str, Union[BayesianResults, Dict[str, Any]]]:
         """
         Get the best model based on comparison.
         
@@ -1289,34 +1347,101 @@ class Lambda3BayesianInference:
         best_name = self.comparison_results['best_model']
         return best_name, self.results[best_name]
     
+    def get_model_weights(self, features: Lambda3FeatureSet) -> Dict[str, float]:
+        """
+        Calculate model weights for ensemble predictions.
+        
+        Args:
+            features: Lambda³ features
+            
+        Returns:
+            Dictionary of model weights based on LOO/WAIC
+        """
+        if self.comparison_results is None:
+            self.compare_models(features)
+        
+        if 'comparison_table' in self.comparison_results:
+            compare_df = self.comparison_results['comparison_table']
+            
+            # Check if weights are already computed by ArviZ
+            if 'weight' in compare_df.columns:
+                weights = compare_df['weight'].to_dict()
+            else:
+                # Compute weights from elpd_loo or waic
+                if 'elpd_loo' in compare_df.columns:
+                    elpd_values = compare_df['elpd_loo'].values
+                elif 'waic' in compare_df.columns:
+                    # For WAIC, lower is better, so negate
+                    elpd_values = -compare_df['waic'].values
+                else:
+                    raise ValueError("No suitable metric for weight calculation")
+                
+                # Akaike-style weights
+                diffs = elpd_values - np.max(elpd_values)
+                exp_diffs = np.exp(diffs)
+                weights_array = exp_diffs / np.sum(exp_diffs)
+                weights = dict(zip(compare_df.index, weights_array))
+            
+            return weights
+        else:
+            # Equal weights as fallback
+            mcmc_models = [name for name, result in self.results.items()
+                         if isinstance(result, BayesianResults)]
+            n_models = len(mcmc_models)
+            return {name: 1.0/n_models for name in mcmc_models}
+    
     def summary(self) -> Dict[str, Any]:
         """
         Generate comprehensive summary of all analyses.
         
         Returns:
-            Summary dictionary
+            Summary dictionary with convergence, comparison, and PPC results
         """
         summary = {
             'n_models': len(self.results),
             'models': list(self.results.keys()),
-            'convergence': {}
+            'convergence': {},
+            'model_types': {}
         }
         
-        # Check convergence for each model
-        for name, results in self.results.items():
-            summary['convergence'][name] = check_convergence(results, verbose=False)
+        # Classify models by type
+        for name, result in self.results.items():
+            if isinstance(result, BayesianResults):
+                summary['model_types'][name] = 'MCMC'
+                # Check convergence
+                summary['convergence'][name] = check_convergence(result, verbose=False)
+            else:
+                summary['model_types'][name] = 'SVI'
+                summary['convergence'][name] = 'N/A (variational)'
         
         # Add comparison results
         if self.comparison_results:
             summary['best_model'] = self.comparison_results.get('best_model')
             if 'comparison_table' in self.comparison_results:
                 summary['comparison_table'] = self.comparison_results['comparison_table']
+            
+            # Add model weights
+            try:
+                summary['model_weights'] = self.get_model_weights(None)
+            except:
+                pass
         
         # Add PPC results
         if self.ppc_results:
             summary['ppc_p_values'] = {
                 model: ppc['bayesian_p_values']
                 for model, ppc in self.ppc_results.items()
+                if isinstance(ppc, dict) and 'bayesian_p_values' in ppc
+            }
+        
+        # Add SVI specific info
+        if 'svi' in self.results:
+            svi_result = self.results['svi']
+            summary['svi_info'] = {
+                'final_loss': svi_result['losses'][-1],
+                'n_iterations': len(svi_result['losses']),
+                'converged': len(svi_result['losses']) > 100 and 
+                           np.std(svi_result['losses'][-100:]) < 0.01
             }
         
         return summary
@@ -1458,39 +1583,6 @@ def compare_models_numpyro(models_dict: Dict[str, Dict[str, Any]],
         comparison_results['comparison_table'] = compare_df
     
     return comparison_results
-
-# 統合インターフェースクラス
-class Lambda3BayesianInferenceNumPyro:
-    """NumPyro版統合ベイジアン推論エンジン"""
-    
-    def __init__(self, config: L3ConfigNumPyro):
-        self.config = config
-        self.results = {}
-        
-    def fit_all_models(self, features: Dict[str, jnp.ndarray],
-                      data: jnp.ndarray) -> Dict[str, Any]:
-        """全モデルタイプを自動フィッティング"""
-        
-        # 基本モデル
-        self.results['base'] = self.fit_model(
-            features, data, model_type='base'
-        )
-        
-        # 動的モデル
-        self.results['dynamic'] = self.fit_model(
-            features, data, model_type='dynamic'
-        )
-        
-        # SVI
-        self.results['svi'] = fit_svi_lambda3_numpyro(
-            features, data, self.config
-        )
-        
-        return self.results
-    
-    def compare_all_models(self) -> Dict[str, Any]:
-        """全モデルの比較"""
-        return compare_models_numpyro(self.results)
 
 # ===============================
 # Helper Functions
