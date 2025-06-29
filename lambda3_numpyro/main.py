@@ -387,7 +387,7 @@ For more information, visit: https://github.com/lambda3/lambda3-numpyro
         help='Cloud storage bucket'
     )
     
-    # Test command (NEW)
+    # Test command
     test_parser = subparsers.add_parser(
         'test',
         help='Run tests for Lambda³ framework'
@@ -437,8 +437,756 @@ def load_config(args) -> L3Config:
 
 
 # ===============================
-# Test Command Implementation
+# Command Implementations
 # ===============================
+
+def cmd_extract(args, config: L3Config):
+    """Execute feature extraction command."""
+    input_path = Path(args.input)
+    output_path = Path(args.output)
+    
+    # Load data
+    if input_path.suffix == '.csv':
+        print(f"Loading data from {input_path}")
+        series_dict = load_csv_series(
+            input_path,
+            time_column=args.time_column,
+            value_columns=args.columns
+        )
+    else:
+        print(f"Error: Input must be a CSV file")
+        return 1
+    
+    # Extract features
+    print(f"\nExtracting Lambda³ features for {len(series_dict)} series...")
+    features_dict = {}
+    
+    for i, (name, data) in enumerate(series_dict.items(), 1):
+        print(f"[{i}/{len(series_dict)}] Processing {name}...")
+        try:
+            features = extract_lambda3_features(data, config, series_name=name)
+            features_dict[name] = features
+            
+            print(f"  ✓ Length: {features.length}")
+            print(f"  ✓ Positive jumps: {features.n_pos_jumps}")
+            print(f"  ✓ Negative jumps: {features.n_neg_jumps}")
+            print(f"  ✓ Mean tension: {features.mean_tension:.3f}")
+        
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            continue
+    
+    if not features_dict:
+        print("Error: No features extracted")
+        return 1
+    
+    # Save features
+    print(f"\nSaving features to {output_path}")
+    save_features(features_dict, output_path, config.cloud)
+    
+    print(f"✓ Successfully extracted features for {len(features_dict)} series")
+    return 0
+
+
+def cmd_analyze(args, config: L3Config):
+    """Execute pairwise analysis command."""
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load data or features
+    if input_path.suffix == '.pkl':
+        print(f"Loading features from {input_path}")
+        features_dict = load_features(input_path, config.cloud)
+    elif input_path.suffix == '.csv':
+        print(f"Loading data from {input_path}")
+        series_dict = load_csv_series(input_path)
+        
+        # Extract features
+        print("Extracting features...")
+        from lambda3_numpyro.feature import extract_features_dict
+        features_dict = extract_features_dict(series_dict, config)
+    else:
+        print(f"Error: Unknown input format {input_path.suffix}")
+        return 1
+    
+    # Check if requested series exist
+    series_a, series_b = args.series
+    if series_a not in features_dict:
+        print(f"Error: Series '{series_a}' not found in data")
+        return 1
+    if series_b not in features_dict:
+        print(f"Error: Series '{series_b}' not found in data")
+        return 1
+    
+    # Run analysis
+    print(f"\nAnalyzing pair: {series_a} ↔ {series_b}")
+    results = analyze_pair(
+        series_a, series_b,
+        features_dict[series_a],
+        features_dict[series_b],
+        config
+    )
+    
+    # Display results
+    print(f"\n{'='*50}")
+    print("ANALYSIS RESULTS")
+    print(f"{'='*50}")
+    print(f"Synchronization rate: {results.sync_profile.max_sync_rate:.3f}")
+    print(f"Optimal lag: {results.sync_profile.optimal_lag}")
+    print(f"\nInteraction effects:")
+    for effect, value in results.interaction_effects.items():
+        if abs(value) > 0.01:
+            print(f"  {effect}: {value:.3f}")
+    
+    # Save results
+    results_file = output_dir / f"analysis_{series_a}_{series_b}.pkl"
+    save_analysis_results(results, results_file, config.cloud)
+    print(f"\nResults saved to {results_file}")
+    
+    # Generate plots if requested
+    if args.plot and PLOTTING_AVAILABLE:
+        from lambda3_numpyro.plot import plot_analysis_results
+        plot_file = output_dir / f"analysis_{series_a}_{series_b}.png"
+        plot_analysis_results(
+            results,
+            features_dict[series_a],
+            features_dict[series_b],
+            save_path=plot_file,
+            config=config.plotting
+        )
+        print(f"Plot saved to {plot_file}")
+    elif args.plot and not PLOTTING_AVAILABLE:
+        print("Warning: Plotting requested but matplotlib not available")
+    
+    return 0
+
+def cmd_analyze_all(args, config: L3Config):
+    """Execute multi-series analysis command."""
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load data or features
+    if input_path.suffix == '.pkl':
+        print(f"Loading features from {input_path}")
+        features_dict = load_features(input_path, config.cloud)
+    elif input_path.suffix == '.csv':
+        print(f"Loading data from {input_path}")
+        series_dict = load_csv_series(input_path)
+        
+        # Extract features
+        print("Extracting features...")
+        from lambda3_numpyro.feature import extract_features_dict
+        features_dict = extract_features_dict(series_dict, config)
+    else:
+        print(f"Error: Unknown input format {input_path.suffix}")
+        return 1
+    
+    print(f"\nFound {len(features_dict)} series: {', '.join(features_dict.keys())}")
+    
+    # Run cross-analysis
+    results = analyze_multiple_series(
+        features_dict,
+        config,
+        show_progress=True
+    )
+    
+    # Display summary
+    print(f"\n{'='*50}")
+    print("CROSS-ANALYSIS SUMMARY")
+    print(f"{'='*50}")
+    print(f"Series analyzed: {results.n_series}")
+    print(f"Pairs analyzed: {results.n_pairs}")
+    
+    # Top synchronizations
+    series_names = results.get_series_names()
+    sync_pairs = []
+    for i in range(results.n_series):
+        for j in range(i+1, results.n_series):
+            sync_pairs.append((
+                results.sync_matrix[i, j],
+                series_names[i],
+                series_names[j]
+            ))
+    
+    sync_pairs.sort(reverse=True)
+    print("\nTop synchronization pairs:")
+    for sync, name_a, name_b in sync_pairs[:5]:
+        print(f"  {name_a} ↔ {name_b}: σₛ = {sync:.3f}")
+    
+    # Save results
+    results_file = output_dir / "cross_analysis_results.pkl"
+    save_analysis_results(results, results_file, config.cloud)
+    print(f"\nResults saved to {results_file}")
+    
+    # Save summary report
+    from lambda3_numpyro.analysis import generate_analysis_summary
+    findings = generate_analysis_summary(results, features_dict)
+    
+    report_file = output_dir / "analysis_report.txt"
+    with open(report_file, 'w') as f:
+        f.write("Lambda³ Cross-Analysis Report\n")
+        f.write("="*50 + "\n\n")
+        f.write(f"Series analyzed: {', '.join(series_names)}\n")
+        f.write(f"Total pairs: {results.n_pairs}\n\n")
+        f.write("Key Findings:\n")
+        for finding in findings:
+            f.write(f"• {finding}\n")
+    
+    print(f"Report saved to {report_file}")
+    
+    # Generate plots if requested
+    if args.plot and PLOTTING_AVAILABLE:
+        from lambda3_numpyro.plot import (
+            plot_interaction_matrix,
+            plot_sync_network,
+            create_analysis_dashboard
+        )
+        
+        # Interaction matrix
+        plot_file = output_dir / "interaction_matrix.png"
+        plot_interaction_matrix(
+            results.interaction_matrix,
+            series_names,
+            save_path=plot_file,
+            config=config.plotting
+        )
+        
+        # Sync network
+        if results.network and results.network.number_of_edges() > 0:
+            plot_file = output_dir / "sync_network.png"
+            plot_sync_network(
+                results.network,
+                save_path=plot_file,
+                config=config.plotting
+            )
+        
+        # Dashboard
+        plot_file = output_dir / "analysis_dashboard.png"
+        create_analysis_dashboard(
+            results,
+            features_dict,
+            save_path=plot_file,
+            config=config.plotting
+        )
+        
+        print(f"Plots saved to {output_dir}")
+    
+    return 0
+
+
+def cmd_regimes(args, config: L3Config):
+    """Execute regime detection command."""
+    input_path = Path(args.input)
+    
+    # Load features
+    print(f"Loading features from {input_path}")
+    features = load_features(input_path, config.cloud)
+    
+    # Handle single or multiple series
+    if isinstance(features, dict):
+        # Multiple series - analyze each
+        regime_results = {}
+        for name, feat in features.items():
+            print(f"\nDetecting regimes for {name}...")
+            regime_info = detect_regimes(feat, n_regimes=args.n_regimes)
+            regime_results[name] = regime_info
+            
+            # Display summary
+            print(f"  Found {regime_info.n_regimes} regimes:")
+            for regime_id, stats in regime_info.regime_stats.items():
+                regime_name = regime_info.get_regime_name(regime_id)
+                print(f"    {regime_name}: {stats['frequency']:.1%} of time")
+    else:
+        # Single series
+        print(f"\nDetecting regimes...")
+        regime_info = detect_regimes(features, n_regimes=args.n_regimes)
+        regime_results = regime_info
+        
+        # Display summary
+        print(f"Found {regime_info.n_regimes} regimes:")
+        for regime_id, stats in regime_info.regime_stats.items():
+            regime_name = regime_info.get_regime_name(regime_id)
+            print(f"  {regime_name}: {stats['frequency']:.1%} of time")
+    
+    # Save results if requested
+    if args.output:
+        output_path = Path(args.output)
+        import pickle
+        with open(output_path, 'wb') as f:
+            pickle.dump(regime_results, f)
+        print(f"\nRegime results saved to {output_path}")
+    
+    # Generate plot if requested
+    if args.plot and PLOTTING_AVAILABLE:
+        from lambda3_numpyro.plot import plot_regimes
+        
+        if isinstance(features, dict):
+            # Plot first series as example
+            first_name = list(features.keys())[0]
+            plot_file = output_path.parent / f"regimes_{first_name}.png" if args.output else "regimes.png"
+            plot_regimes(
+                features[first_name],
+                regime_results[first_name],
+                save_path=plot_file,
+                config=config.plotting
+            )
+        else:
+            plot_file = output_path.parent / "regimes.png" if args.output else "regimes.png"
+            plot_regimes(
+                features,
+                regime_results,
+                save_path=plot_file,
+                config=config.plotting
+            )
+        print(f"Plot saved to {plot_file}")
+    
+    return 0
+
+def cmd_finance(args, config: L3Config):
+    """Execute financial data download command."""
+    # Build tickers dictionary
+    if args.tickers:
+        tickers = {ticker: ticker for ticker in args.tickers}
+    else:
+        # Default tickers
+        tickers = None
+    
+    # Download data
+    print(f"Downloading financial data from {args.start} to {args.end}")
+    series_dict = load_financial_data(
+        start_date=args.start,
+        end_date=args.end,
+        tickers=tickers,
+        save_csv=True,
+        csv_filename=args.output
+    )
+    
+    print(f"\nDownloaded {len(series_dict)} series")
+    
+    # Run analysis if requested
+    if args.analyze:
+        print("\nRunning Lambda³ analysis on downloaded data...")
+        
+        # Extract features
+        from lambda3_numpyro.feature import extract_features_dict
+        features_dict = extract_features_dict(series_dict, config)
+        
+        # Save features
+        features_path = Path(args.output).with_suffix('.pkl')
+        save_features(features_dict, features_path)
+        print(f"Features saved to {features_path}")
+        
+        # Run cross-analysis if multiple series
+        if len(features_dict) > 1:
+            results = analyze_multiple_series(features_dict, config)
+            results_path = Path(args.output).parent / "financial_analysis_results.pkl"
+            save_analysis_results(results, results_path)
+            print(f"Analysis results saved to {results_path}")
+    
+    return 0
+
+
+def cmd_dashboard(args, config: L3Config):
+    """Execute dashboard creation command."""
+    # Load results and features
+    print(f"Loading analysis results from {args.results}")
+    results = load_analysis_results(Path(args.results), config.cloud)
+    
+    print(f"Loading features from {args.features}")
+    features_dict = load_features(Path(args.features), config.cloud)
+    
+    # Create dashboard
+    if PLOTTING_AVAILABLE:
+        from lambda3_numpyro.plot import create_analysis_dashboard
+        
+        print("Creating analysis dashboard...")
+        create_analysis_dashboard(
+            results,
+            features_dict,
+            save_path=Path(args.output),
+            config=config.plotting
+        )
+        print(f"Dashboard saved to {args.output}")
+    else:
+        print("Error: Plotting libraries not available")
+        return 1
+    
+    return 0
+
+
+def cmd_bayesian(args, config: L3Config):
+    """Execute Bayesian analysis command."""
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load features
+    if input_path.suffix == '.pkl':
+        print(f"Loading features from {input_path}")
+        features = load_features(input_path, config.cloud)
+        
+        # If multiple series, use first one
+        if isinstance(features, dict):
+            first_name = list(features.keys())[0]
+            print(f"Using first series: {first_name}")
+            features = features[first_name]
+    else:
+        print(f"Loading data from {input_path}")
+        series_dict = load_csv_series(input_path)
+        # Use first series
+        first_name = list(series_dict.keys())[0]
+        print(f"Extracting features for {first_name}...")
+        features = extract_lambda3_features(series_dict[first_name], config)
+    
+    # Run complete Bayesian analysis
+    from lambda3_numpyro.bayes import run_complete_bayesian_analysis
+    
+    results = run_complete_bayesian_analysis(
+        features,
+        config,
+        include_svi=args.include_svi
+    )
+    
+    # Save results
+    results_file = output_dir / "bayesian_results.pkl"
+    import pickle
+    with open(results_file, 'wb') as f:
+        pickle.dump(results, f)
+    print(f"\nResults saved to {results_file}")
+    
+    # Save model comparison
+    if 'comparison' in results:
+        comparison_file = output_dir / "model_comparison.json"
+        comparison_data = {
+            'best_model': results['best_model'],
+            'criterion': args.criterion
+        }
+        with open(comparison_file, 'w') as f:
+            json.dump(comparison_data, f, indent=2)
+        print(f"Model comparison saved to {comparison_file}")
+    
+    return 0
+
+
+def cmd_hierarchical(args, config: L3Config):
+    """Execute hierarchical Bayesian analysis command."""
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load features
+    print(f"Loading features from {input_path}")
+    features_dict = load_features(input_path, config.cloud)
+    
+    if not isinstance(features_dict, dict):
+        print("Error: Hierarchical analysis requires multiple series")
+        return 1
+    
+    # Convert to list
+    features_list = list(features_dict.values())
+    series_names = list(features_dict.keys())
+    
+    print(f"Found {len(features_list)} series: {', '.join(series_names)}")
+    
+    # Run hierarchical model
+    from lambda3_numpyro.bayes import fit_hierarchical_model
+    
+    results = fit_hierarchical_model(
+        features_list,
+        config,
+        group_ids=args.group_ids,
+        seed=42
+    )
+    
+    # Save results
+    results_file = output_dir / "hierarchical_results.pkl"
+    import pickle
+    with open(results_file, 'wb') as f:
+        pickle.dump({
+            'results': results,
+            'series_names': series_names,
+            'group_ids': args.group_ids
+        }, f)
+    print(f"\nResults saved to {results_file}")
+    
+    return 0
+
+
+def cmd_compare(args, config: L3Config):
+    """Execute model comparison command."""
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load features
+    print(f"Loading features from {input_path}")
+    features = load_features(input_path, config.cloud)
+    
+    # If multiple series, use first one
+    if isinstance(features, dict):
+        first_name = list(features.keys())[0]
+        print(f"Using first series: {first_name}")
+        features = features[first_name]
+    
+    # Fit requested models
+    from lambda3_numpyro.bayes import fit_bayesian_model, fit_dynamic_model, compare_models
+    
+    models_dict = {}
+    
+    for model_type in args.models:
+        print(f"\nFitting {model_type} model...")
+        
+        if model_type == 'base':
+            results = fit_bayesian_model(features, config, model_type='base')
+        elif model_type == 'dynamic':
+            results = fit_dynamic_model(features, config)
+        elif model_type == 'interaction':
+            # For interaction model, we need another series
+            print("Warning: Interaction model requires two series, using self-interaction")
+            results = fit_bayesian_model(
+                features, config, 
+                interaction_features=features,
+                model_type='interaction'
+            )
+        
+        models_dict[model_type] = results
+    
+    # Compare models
+    print("\nComparing models...")
+    comparison = compare_models(models_dict, features, criterion='loo')
+    
+    # Save results
+    results_file = output_dir / "comparison_results.pkl"
+    import pickle
+    with open(results_file, 'wb') as f:
+        pickle.dump({
+            'models': models_dict,
+            'comparison': comparison
+        }, f)
+    print(f"\nResults saved to {results_file}")
+    
+    return 0
+
+
+def cmd_ppc(args, config: L3Config):
+    """Execute posterior predictive check command."""
+    # Load results and features
+    print(f"Loading Bayesian results from {args.results}")
+    import pickle
+    with open(args.results, 'rb') as f:
+        results_data = pickle.load(f)
+    
+    print(f"Loading features from {args.features}")
+    features = load_features(Path(args.features), config.cloud)
+    
+    # Extract results
+    if isinstance(results_data, dict) and 'results' in results_data:
+        results = results_data['results']
+    else:
+        results = results_data
+    
+    # If multiple series in features, use first
+    if isinstance(features, dict):
+        features = list(features.values())[0]
+    
+    # Run PPC
+    from lambda3_numpyro.bayes import posterior_predictive_check
+    
+    print("Running posterior predictive checks...")
+    ppc_results = posterior_predictive_check(results, features)
+    
+    # Display results
+    print("\nBayesian p-values:")
+    for stat, p_val in ppc_results['bayesian_p_values'].items():
+        print(f"  {stat}: {p_val:.3f}")
+    
+    # Plot if requested
+    if args.output and PLOTTING_AVAILABLE:
+        from lambda3_numpyro.plot import plot_posterior_predictive_check
+        
+        plot_posterior_predictive_check(
+            ppc_results,
+            features.data,
+            save_path=Path(args.output),
+            config=config.plotting
+        )
+        print(f"\nPPC plot saved to {args.output}")
+    
+    return 0
+
+
+def cmd_changepoints(args, config: L3Config):
+    """Execute change point detection command."""
+    input_path = Path(args.input)
+    
+    # Load data
+    if input_path.suffix == '.csv':
+        print(f"Loading data from {input_path}")
+        series_dict = load_csv_series(input_path)
+        # Extract features
+        from lambda3_numpyro.feature import extract_features_dict
+        features_dict = extract_features_dict(series_dict, config)
+    else:
+        print(f"Loading features from {input_path}")
+        features_dict = load_features(input_path, config.cloud)
+    
+    # Ensure dict format
+    if not isinstance(features_dict, dict):
+        features_dict = {'Series': features_dict}
+    
+    # Detect change points for each series
+    from lambda3_numpyro.bayes import detect_change_points_automatic
+    
+    changepoint_results = {}
+    
+    for name, features in features_dict.items():
+        print(f"\nDetecting change points for {name}...")
+        
+        change_points = detect_change_points_automatic(
+            features.data,
+            window_size=args.window_size,
+            threshold_factor=args.threshold
+        )
+        
+        changepoint_results[name] = {
+            'change_points': change_points,
+            'n_changepoints': len(change_points)
+        }
+        
+        print(f"  Found {len(change_points)} change points: {change_points}")
+    
+    # Plot if requested
+    if args.plot and PLOTTING_AVAILABLE:
+        from lambda3_numpyro.plot import plot_changepoint_analysis
+        
+        for name, features in features_dict.items():
+            if name in changepoint_results:
+                plot_file = f"changepoints_{name}.png"
+                
+                # Create segments for plotting
+                change_points = changepoint_results[name]['change_points']
+                segments = []
+                
+                # Add initial segment
+                if change_points:
+                    segments.append({
+                        'start': 0,
+                        'end': change_points[0],
+                        'length': change_points[0]
+                    })
+                
+                # Add intermediate segments
+                for i in range(len(change_points) - 1):
+                    segments.append({
+                        'start': change_points[i],
+                        'end': change_points[i + 1],
+                        'length': change_points[i + 1] - change_points[i]
+                    })
+                
+                # Add final segment
+                if change_points:
+                    segments.append({
+                        'start': change_points[-1],
+                        'end': len(features.data),
+                        'length': len(features.data) - change_points[-1]
+                    })
+                else:
+                    # No change points - single segment
+                    segments.append({
+                        'start': 0,
+                        'end': len(features.data),
+                        'length': len(features.data)
+                    })
+                
+                # Add statistics for each segment
+                for seg in segments:
+                    data_segment = features.data[seg['start']:seg['end']]
+                    if len(data_segment) > 0:
+                        seg['mean'] = np.mean(data_segment)
+                        seg['std'] = np.std(data_segment)
+                        seg['trend'] = np.polyfit(range(len(data_segment)), data_segment, 1)[0] if len(data_segment) > 1 else 0
+                    else:
+                        seg['mean'] = 0
+                        seg['std'] = 0
+                        seg['trend'] = 0
+                
+                changepoint_results[name]['segments'] = segments
+                
+                plot_changepoint_analysis(
+                    features,
+                    changepoint_results[name],
+                    save_path=plot_file,
+                    config=config.plotting
+                )
+                print(f"  Plot saved to {plot_file}")
+    
+    return 0
+
+
+def cmd_cloud(args, config: L3Config):
+    """Execute cloud storage operations."""
+    # Update config with command line arguments
+    if args.provider:
+        config.cloud.provider = args.provider
+    if args.bucket:
+        config.cloud.bucket = args.bucket
+    
+    # Validate cloud configuration
+    try:
+        config.cloud.validate()
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+    
+    if args.action == 'upload':
+        if not args.file or not args.remote:
+            print("Error: --file and --remote required for upload")
+            return 1
+        
+        print(f"Uploading {args.file} to {config.cloud.provider}://{config.cloud.bucket}/{args.remote}")
+        
+        # Load the file and save to cloud
+        file_path = Path(args.file)
+        if file_path.suffix == '.pkl':
+            # Handle pickle files
+            import pickle
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+            
+            from lambda3_numpyro.io import _save_to_cloud
+            _save_to_cloud(data, Path(args.remote), config.cloud)
+        else:
+            print("Error: Only .pkl files are currently supported for cloud upload")
+            return 1
+        
+        print("✓ Upload complete")
+    
+    elif args.action == 'download':
+        if not args.remote or not args.file:
+            print("Error: --remote and --file required for download")
+            return 1
+        
+        print(f"Downloading {config.cloud.provider}://{config.cloud.bucket}/{args.remote} to {args.file}")
+        
+        from lambda3_numpyro.io import _load_from_cloud
+        data = _load_from_cloud(Path(args.remote), config.cloud)
+        
+        # Save locally
+        import pickle
+        with open(args.file, 'wb') as f:
+            pickle.dump(data, f)
+        
+        print("✓ Download complete")
+    
+    elif args.action == 'list':
+        print(f"Listing files in {config.cloud.provider}://{config.cloud.bucket}/{config.cloud.prefix}")
+        print("Note: List functionality not yet implemented")
+        # TODO: Implement list functionality for each provider
+    
+    return 0
+
 
 def cmd_test(args, config: L3Config):
     """Execute test command."""
@@ -494,6 +1242,10 @@ def cmd_test(args, config: L3Config):
     # Return appropriate exit code
     return 0 if total_failed == 0 else 1
 
+
+# ===============================
+# Test Functions
+# ===============================
 
 def run_unit_tests(modules: Optional[List[str]], config: L3Config, verbose: bool) -> Dict:
     """Run unit tests for specified modules."""
@@ -826,7 +1578,8 @@ def test_bayesian_models(config: L3Config, verbose: bool) -> List[Dict]:
 
 def test_analysis_functions(config: L3Config, verbose: bool) -> List[Dict]:
     """Test analysis functions."""
-    from lambda3_numpyro import extract_lambda3_features, analyze_pair, calculate_sync_profile
+    from lambda3_numpyro import extract_lambda3_features, calculate_sync_profile
+    from lambda3_numpyro.analysis import analyze_pair
     
     results = []
     
@@ -858,20 +1611,29 @@ def test_analysis_functions(config: L3Config, verbose: bool) -> List[Dict]:
         if verbose:
             print(f"    ✗ {test_name}: {e}")
     
-    # Test 2: Interaction tensor
-    test_name = "Interaction tensor creation"
+    # Test 2: analyze_pair function
+    test_name = "Pairwise analysis function"
     try:
-        from lambda3_numpyro.analysis import build_multi_effect_tensor
+        # Create test data
+        np.random.seed(42)
+        data_a = np.cumsum(np.random.randn(100))
+        data_b = np.cumsum(np.random.randn(100))
         
-        # Create dummy pairwise results
-        pairwise_results = {}
-        series_names = ['A', 'B', 'C']
+        features_a = extract_lambda3_features(data_a, config, series_name='A')
+        features_b = extract_lambda3_features(data_b, config, series_name='B')
         
-        # Build tensor (should handle empty results)
-        tensor = build_multi_effect_tensor(pairwise_results, series_names)
+        # Run analysis with reduced config
+        test_config = L3Config()
+        test_config.bayesian.draws = 50
+        test_config.bayesian.tune = 50
+        test_config.bayesian.num_chains = 1
         
-        assert tensor.shape == (3, 3, 3)  # N×N×3 for pos, neg, stress
-        assert np.all(tensor == 0)  # Should be zeros for empty results
+        result = analyze_pair('A', 'B', features_a, features_b, test_config, seed=42)
+        
+        # Verify result structure
+        assert result.sync_profile is not None
+        assert result.interaction_effects is not None
+        assert len(result.interaction_effects) > 0
         
         results.append({
             'name': test_name,
@@ -890,8 +1652,7 @@ def test_analysis_functions(config: L3Config, verbose: bool) -> List[Dict]:
             print(f"    ✗ {test_name}: {e}")
     
     return results
-
-
+    
 def test_io_operations(config: L3Config, verbose: bool) -> List[Dict]:
     """Test I/O operations."""
     from lambda3_numpyro import save_features, load_features, extract_lambda3_features
@@ -978,6 +1739,7 @@ def test_configuration(verbose: bool) -> List[Dict]:
         assert 'sigma_s' in LAMBDA3_SYMBOLS
         assert LAMBDA3_SYMBOLS['sigma_s'] == 'sync_rate'
         assert 'rho_T' in LAMBDA3_SYMBOLS
+        assert 'Q_Lambda' in LAMBDA3_SYMBOLS  # QΛを追加済み
         
         results.append({
             'name': test_name,
@@ -1052,8 +1814,9 @@ def test_complete_pipeline(config: L3Config, verbose: bool) -> Dict:
     import tempfile
     from lambda3_numpyro import (
         extract_lambda3_features, save_features, load_features,
-        analyze_pair, save_analysis_results, load_analysis_results
+        save_analysis_results, load_analysis_results
     )
+    from lambda3_numpyro.analysis import analyze_pair
     
     try:
         # 1. Generate synthetic data
@@ -1245,248 +2008,8 @@ def test_model_comparison(config: L3Config, verbose: bool) -> Dict:
 
 
 # ===============================
-# Original Command Functions (kept as is)
+# Main Entry Point
 # ===============================
-
-def cmd_extract(args, config: L3Config):
-    """Execute feature extraction command."""
-    input_path = Path(args.input)
-    output_path = Path(args.output)
-    
-    # Load data
-    if input_path.suffix == '.csv':
-        print(f"Loading data from {input_path}")
-        series_dict = load_csv_series(
-            input_path,
-            time_column=args.time_column,
-            value_columns=args.columns
-        )
-    else:
-        print(f"Error: Input must be a CSV file")
-        return 1
-    
-    # Extract features
-    print(f"\nExtracting Lambda³ features for {len(series_dict)} series...")
-    features_dict = {}
-    
-    for i, (name, data) in enumerate(series_dict.items(), 1):
-        print(f"[{i}/{len(series_dict)}] Processing {name}...")
-        try:
-            features = extract_lambda3_features(data, config, series_name=name)
-            features_dict[name] = features
-            
-            print(f"  ✓ Length: {features.length}")
-            print(f"  ✓ Positive jumps: {features.n_pos_jumps}")
-            print(f"  ✓ Negative jumps: {features.n_neg_jumps}")
-            print(f"  ✓ Mean tension: {features.mean_tension:.3f}")
-        
-        except Exception as e:
-            print(f"  ✗ Error: {e}")
-            continue
-    
-    if not features_dict:
-        print("Error: No features extracted")
-        return 1
-    
-    # Save features
-    print(f"\nSaving features to {output_path}")
-    save_features(features_dict, output_path, config.cloud)
-    
-    print(f"✓ Successfully extracted features for {len(features_dict)} series")
-    return 0
-
-
-def cmd_analyze(args, config: L3Config):
-    """Execute pairwise analysis command."""
-    input_path = Path(args.input)
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Load data or features
-    if input_path.suffix == '.pkl':
-        print(f"Loading features from {input_path}")
-        features_dict = load_features(input_path, config.cloud)
-    elif input_path.suffix == '.csv':
-        print(f"Loading data from {input_path}")
-        series_dict = load_csv_series(input_path)
-        
-        # Extract features
-        print("Extracting features...")
-        from lambda3_numpyro.feature import extract_features_dict
-        features_dict = extract_features_dict(series_dict, config)
-    else:
-        print(f"Error: Unknown input format {input_path.suffix}")
-        return 1
-    
-    # Check if requested series exist
-    series_a, series_b = args.series
-    if series_a not in features_dict:
-        print(f"Error: Series '{series_a}' not found in data")
-        return 1
-    if series_b not in features_dict:
-        print(f"Error: Series '{series_b}' not found in data")
-        return 1
-    
-    # Run analysis
-    print(f"\nAnalyzing pair: {series_a} ↔ {series_b}")
-    results = analyze_pair(
-        series_a, series_b,
-        features_dict[series_a],
-        features_dict[series_b],
-        config
-    )
-    
-    # Display results
-    print(f"\n{'='*50}")
-    print("ANALYSIS RESULTS")
-    print(f"{'='*50}")
-    print(f"Synchronization rate: {results.sync_profile.max_sync_rate:.3f}")
-    print(f"Optimal lag: {results.sync_profile.optimal_lag}")
-    print(f"\nInteraction effects:")
-    for effect, value in results.interaction_effects.items():
-        if abs(value) > 0.01:
-            print(f"  {effect}: {value:.3f}")
-    
-    # Save results
-    results_file = output_dir / f"analysis_{series_a}_{series_b}.pkl"
-    save_analysis_results(results, results_file, config.cloud)
-    print(f"\nResults saved to {results_file}")
-    
-    # Generate plots if requested
-    if args.plot and PLOTTING_AVAILABLE:
-        from lambda3_numpyro.plot import plot_analysis_results
-        plot_file = output_dir / f"analysis_{series_a}_{series_b}.png"
-        plot_analysis_results(
-            results,
-            features_dict[series_a],
-            features_dict[series_b],
-            save_path=plot_file,
-            config=config.plotting
-        )
-        print(f"Plot saved to {plot_file}")
-    elif args.plot and not PLOTTING_AVAILABLE:
-        print("Warning: Plotting requested but matplotlib not available")
-    
-    return 0
-
-
-def cmd_analyze_all(args, config: L3Config):
-    """Execute multi-series analysis command."""
-    input_path = Path(args.input)
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Load data or features
-    if input_path.suffix == '.pkl':
-        print(f"Loading features from {input_path}")
-        features_dict = load_features(input_path, config.cloud)
-    elif input_path.suffix == '.csv':
-        print(f"Loading data from {input_path}")
-        series_dict = load_csv_series(input_path)
-        
-        # Extract features
-        print("Extracting features...")
-        from lambda3_numpyro.feature import extract_features_dict
-        features_dict = extract_features_dict(series_dict, config)
-    else:
-        print(f"Error: Unknown input format {input_path.suffix}")
-        return 1
-    
-    print(f"\nFound {len(features_dict)} series: {', '.join(features_dict.keys())}")
-    
-    # Run cross-analysis
-    results = analyze_multiple_series(
-        features_dict,
-        config,
-        show_progress=True
-    )
-    
-    # Display summary
-    print(f"\n{'='*50}")
-    print("CROSS-ANALYSIS SUMMARY")
-    print(f"{'='*50}")
-    print(f"Series analyzed: {results.n_series}")
-    print(f"Pairs analyzed: {results.n_pairs}")
-    
-    # Top synchronizations
-    series_names = results.get_series_names()
-    sync_pairs = []
-    for i in range(results.n_series):
-        for j in range(i+1, results.n_series):
-            sync_pairs.append((
-                results.sync_matrix[i, j],
-                series_names[i],
-                series_names[j]
-            ))
-    
-    sync_pairs.sort(reverse=True)
-    print("\nTop synchronization pairs:")
-    for sync, name_a, name_b in sync_pairs[:5]:
-        print(f"  {name_a} ↔ {name_b}: σₛ = {sync:.3f}")
-    
-    # Save results
-    results_file = output_dir / "cross_analysis_results.pkl"
-    save_analysis_results(results, results_file, config.cloud)
-    print(f"\nResults saved to {results_file}")
-    
-    # Save summary report
-    from lambda3_numpyro.analysis import generate_analysis_summary
-    findings = generate_analysis_summary(results, features_dict)
-    
-    report_file = output_dir / "analysis_report.txt"
-    with open(report_file, 'w') as f:
-        f.write("Lambda³ Cross-Analysis Report\n")
-        f.write("="*50 + "\n\n")
-        f.write(f"Series analyzed: {', '.join(series_names)}\n")
-        f.write(f"Total pairs: {results.n_pairs}\n\n")
-        f.write("Key Findings:\n")
-        for finding in findings:
-            f.write(f"• {finding}\n")
-    
-    print(f"Report saved to {report_file}")
-    
-    # Generate plots if requested
-    if args.plot and PLOTTING_AVAILABLE:
-        from lambda3_numpyro.plot import (
-            plot_interaction_matrix,
-            plot_sync_network,
-            create_analysis_dashboard
-        )
-        
-        # Interaction matrix
-        plot_file = output_dir / "interaction_matrix.png"
-        plot_interaction_matrix(
-            results.interaction_matrix,
-            series_names,
-            save_path=plot_file,
-            config=config.plotting
-        )
-        
-        # Sync network
-        if results.network and results.network.number_of_edges() > 0:
-            plot_file = output_dir / "sync_network.png"
-            plot_sync_network(
-                results.network,
-                save_path=plot_file,
-                config=config.plotting
-            )
-        
-        # Dashboard
-        plot_file = output_dir / "analysis_dashboard.png"
-        create_analysis_dashboard(
-            results,
-            features_dict,
-            save_path=plot_file,
-            config=config.plotting
-        )
-        
-        print(f"Plots saved to {output_dir}")
-    
-    return 0
-
-
-# ... (include all other cmd_* functions from the original file)
-
 
 def main():
     """Main entry point."""
@@ -1521,9 +2044,26 @@ def main():
             return cmd_analyze(args, config)
         elif args.command == 'analyze-all':
             return cmd_analyze_all(args, config)
+        elif args.command == 'regimes':
+            return cmd_regimes(args, config)
+        elif args.command == 'finance':
+            return cmd_finance(args, config)
+        elif args.command == 'dashboard':
+            return cmd_dashboard(args, config)
+        elif args.command == 'bayesian':
+            return cmd_bayesian(args, config)
+        elif args.command == 'hierarchical':
+            return cmd_hierarchical(args, config)
+        elif args.command == 'compare':
+            return cmd_compare(args, config)
+        elif args.command == 'ppc':
+            return cmd_ppc(args, config)
+        elif args.command == 'changepoints':
+            return cmd_changepoints(args, config)
+        elif args.command == 'cloud':
+            return cmd_cloud(args, config)
         elif args.command == 'test':
             return cmd_test(args, config)
-        # ... (include all other command handlers)
         else:
             print(f"Unknown command: {args.command}")
             return 1
@@ -1542,4 +2082,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
- 
