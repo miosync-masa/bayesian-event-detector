@@ -29,10 +29,10 @@ class Lambda3FeatureSet:
     
     Attributes:
         data: Original time series data
-        delta_LambdaC_pos: Positive jump events (ΔΛC+)
-        delta_LambdaC_neg: Negative jump events (ΔΛC-)
+        delta_LambdaC_pos: Positive jump events (ΔΛC⁺)
+        delta_LambdaC_neg: Negative jump events (ΔΛC⁻)
         rho_T: Tension scalar (ρT) - local volatility measure
-        time_trend: Linear time trend component
+        time_trend: Linear time trend component (ΛF)
         local_jump: Local jump detection based on normalized score
         metadata: Optional metadata (source, timeframe, etc.)
     """
@@ -67,7 +67,7 @@ class Lambda3FeatureSet:
             if not np.all(np.isin(arr, [0, 1])):
                 raise ValueError(f"{name} must be binary (0 or 1)")
         
-        # Ensure data types
+        # Ensure data types (keep 64-bit for precision)
         self.data = np.asarray(self.data, dtype=np.float64)
         self.delta_LambdaC_pos = np.asarray(self.delta_LambdaC_pos, dtype=np.int32)
         self.delta_LambdaC_neg = np.asarray(self.delta_LambdaC_neg, dtype=np.int32)
@@ -82,12 +82,12 @@ class Lambda3FeatureSet:
     
     @property
     def n_pos_jumps(self) -> int:
-        """Count of positive jump events"""
+        """Count of positive jump events (ΔΛC⁺)"""
         return int(np.sum(self.delta_LambdaC_pos))
     
     @property
     def n_neg_jumps(self) -> int:
-        """Count of negative jump events"""
+        """Count of negative jump events (ΔΛC⁻)"""
         return int(np.sum(self.delta_LambdaC_neg))
     
     @property
@@ -97,21 +97,29 @@ class Lambda3FeatureSet:
     
     @property
     def mean_tension(self) -> float:
-        """Average tension scalar value"""
+        """Average tension scalar value (mean ρT)"""
         return float(np.mean(self.rho_T))
     
     @property
     def max_tension(self) -> float:
-        """Maximum tension scalar value"""
+        """Maximum tension scalar value (max ρT)"""
         return float(np.max(self.rho_T))
     
     @property
     def jump_asymmetry(self) -> float:
-        """Asymmetry measure: (pos - neg) / (pos + neg)"""
+        """Asymmetry measure: (ΔΛC⁺ - ΔΛC⁻) / (ΔΛC⁺ + ΔΛC⁻)"""
         total = self.n_pos_jumps + self.n_neg_jumps
         if total == 0:
             return 0.0
         return (self.n_pos_jumps - self.n_neg_jumps) / total
+    
+    @property
+    def tension_variability(self) -> float:
+        """Coefficient of variation for tension scalar (σ(ρT) / μ(ρT))"""
+        mean_rho = self.mean_tension
+        if mean_rho == 0:
+            return 0.0
+        return float(np.std(self.rho_T) / mean_rho)
     
     def to_dict(self) -> Dict[str, np.ndarray]:
         """Convert to dictionary format (backward compatibility)"""
@@ -138,9 +146,29 @@ class Lambda3FeatureSet:
         )
     
     def get_high_tension_periods(self, percentile: float = 90) -> np.ndarray:
-        """Get indices where tension exceeds given percentile"""
+        """Get indices where tension (ρT) exceeds given percentile"""
         threshold = np.percentile(self.rho_T, percentile)
         return np.where(self.rho_T > threshold)[0]
+    
+    def get_lambda3_summary(self) -> Dict[str, Any]:
+        """Get summary of Lambda³ theoretical components"""
+        return {
+            'structural_tensor_Λ': {
+                'ΔΛC⁺_count': self.n_pos_jumps,
+                'ΔΛC⁻_count': self.n_neg_jumps,
+                'ΔΛC_asymmetry': self.jump_asymmetry,
+                'local_ΔΛC_pulsations': self.n_local_jumps
+            },
+            'tension_scalar_ρT': {
+                'mean': self.mean_tension,
+                'max': self.max_tension,
+                'variability': self.tension_variability
+            },
+            'progression_vector_ΛF': {
+                'length': self.length,
+                'trend_range': (float(self.time_trend[0]), float(self.time_trend[-1]))
+            }
+        }
 
 
 @dataclass
@@ -149,7 +177,7 @@ class SyncProfile:
     Synchronization profile between two time series.
     
     Lambda³理論において、同期は構造テンソルΛの
-    相関構造として現れる。
+    相関構造として現れる。σₛは同期率を表す。
     
     Attributes:
         profile: Sync rate at each lag {lag: sync_rate}
@@ -169,7 +197,7 @@ class SyncProfile:
     
     @property
     def sync_strength(self) -> str:
-        """Categorize synchronization strength"""
+        """Categorize synchronization strength based on σₛ"""
         if self.max_sync_rate < 0.1:
             return "none"
         elif self.max_sync_rate < 0.3:
@@ -188,6 +216,11 @@ class SyncProfile:
     def get_significant_lags(self, threshold: float = 0.2) -> List[int]:
         """Get lags with sync rate above threshold"""
         return [lag for lag, sync in self.profile.items() if sync > threshold]
+    
+    def get_lambda3_description(self) -> str:
+        """Get Lambda³ theoretical description"""
+        return (f"σₛ = {self.max_sync_rate:.3f} at lag {self.optimal_lag}, "
+                f"indicating {self.sync_strength} structural synchronization")
 
 
 @dataclass
@@ -196,7 +229,7 @@ class CausalityProfile:
     Causality analysis results for a series or pair.
     
     構造因果性：ΔΛCの伝播パターンとして
-    因果関係を定量化。
+    因果関係を定量化。P(ΔΛC⁻|ΔΛC⁺)で表現。
     
     Attributes:
         self_causality: P(negative jump | positive jump) by lag
@@ -224,6 +257,17 @@ class CausalityProfile:
     def is_causal(self, threshold: float = 0.3) -> bool:
         """Check if significant causality exists"""
         return self.max_causality_strength > threshold
+    
+    def get_causality_type(self) -> str:
+        """Determine causality type in Lambda³ terms"""
+        if self.max_causality_strength < 0.1:
+            return "non-causal"
+        elif self.max_causality_strength < 0.3:
+            return "weakly-causal"
+        elif self.max_causality_lag < 3:
+            return "immediate-causal"
+        else:
+            return "delayed-causal"
 
 
 @dataclass
@@ -272,6 +316,25 @@ class BayesianResults:
         if self.summary is not None and param_name in self.summary.index:
             return self.summary.loc[param_name].to_dict()
         return None
+    
+    def get_lambda3_parameters(self) -> Dict[str, float]:
+        """Extract Lambda³ theory parameters from results"""
+        params = {}
+        if self.summary is not None:
+            # Map parameter names to Lambda³ notation
+            param_mapping = {
+                'beta_dLC_pos': 'β_ΔΛC⁺',
+                'beta_dLC_neg': 'β_ΔΛC⁻',
+                'beta_rhoT': 'β_ρT',
+                'beta_time': 'β_ΛF',
+                'beta_local_jump': 'β_local_ΔΛC'
+            }
+            
+            for param, lambda_name in param_mapping.items():
+                if param in self.summary.index:
+                    params[lambda_name] = float(self.summary.loc[param, 'mean'])
+        
+        return params
 
 
 @dataclass
@@ -284,8 +347,8 @@ class AnalysisResult:
     Attributes:
         trace_a: Bayesian results for series A
         trace_b: Bayesian results for series B
-        sync_profile: Synchronization profile
-        interaction_effects: Interaction coefficients
+        sync_profile: Synchronization profile (σₛ profile)
+        interaction_effects: Interaction coefficients (β)
         causality_profiles: Causality analysis results
         metadata: Analysis metadata (timestamps, config, etc.)
     """
@@ -307,14 +370,14 @@ class AnalysisResult:
     
     @property
     def primary_interaction(self) -> Tuple[str, float]:
-        """Get the strongest interaction effect"""
+        """Get the strongest interaction effect (max |β|)"""
         if not self.interaction_effects:
             return ('none', 0.0)
         key = max(self.interaction_effects.items(), key=lambda x: abs(x[1]))[0]
         return (key, self.interaction_effects[key])
     
     def get_significant_interactions(self, threshold: float = 0.1) -> Dict[str, float]:
-        """Get structurally significant interactions"""
+        """Get structurally significant interactions (|β| > threshold)"""
         return {
             key: value for key, value in self.interaction_effects.items()
             if abs(value) > threshold
@@ -335,6 +398,22 @@ class AnalysisResult:
         has_a_to_b = any(f"{name_a}_to_{name_b}" in k for k in self.interaction_effects)
         has_b_to_a = any(f"{name_b}_to_{name_a}" in k for k in self.interaction_effects)
         return has_a_to_b and has_b_to_a
+    
+    def get_lambda3_summary(self) -> Dict[str, Any]:
+        """Get Lambda³ theoretical summary of results"""
+        return {
+            'synchronization_σₛ': {
+                'max': self.sync_profile.max_sync_rate,
+                'optimal_lag': self.sync_profile.optimal_lag,
+                'strength': self.sync_profile.sync_strength
+            },
+            'interaction_β': {
+                'primary': self.primary_interaction,
+                'significant': self.get_significant_interactions(),
+                'bidirectional': self.is_bidirectional
+            },
+            'convergence': self.convergence_summary()
+        }
 
 
 @dataclass
@@ -346,8 +425,8 @@ class CrossAnalysisResult:
     
     Attributes:
         pairwise_results: Results for each series pair
-        sync_matrix: Full synchronization matrix
-        interaction_matrix: Full interaction effect matrix
+        sync_matrix: Full synchronization matrix (σₛ matrix)
+        interaction_matrix: Full interaction effect matrix (β matrix)
         network: Synchronization network graph
         clusters: Series clustering results
         metadata: Analysis metadata
@@ -397,13 +476,50 @@ class CrossAnalysisResult:
         return [(node, deg) for node, deg in in_degrees.items() if deg >= threshold]
     
     def get_strongest_sync_pair(self) -> Tuple[str, str, float]:
-        """Get the pair with strongest synchronization"""
+        """Get the pair with strongest synchronization (max σₛ)"""
         series_names = self.get_series_names()
         # Set diagonal to -1 to exclude self-sync
         sync_mat = self.sync_matrix.copy()
         np.fill_diagonal(sync_mat, -1)
         max_idx = np.unravel_index(np.argmax(sync_mat), sync_mat.shape)
         return (series_names[max_idx[0]], series_names[max_idx[1]], sync_mat[max_idx])
+    
+    def get_interaction_tensor(self) -> Optional[np.ndarray]:
+        """Get full interaction tensor if available"""
+        if self.metadata and 'interaction_tensor' in self.metadata:
+            return self.metadata['interaction_tensor']
+        return None
+    
+    def get_lambda3_network_summary(self) -> Dict[str, Any]:
+        """Get Lambda³ theoretical network summary"""
+        strongest_sync = self.get_strongest_sync_pair()
+        hub_nodes = self.get_hub_nodes()
+        
+        summary = {
+            'network_stats': {
+                'n_series': self.n_series,
+                'n_pairs_analyzed': self.n_pairs,
+                'network_density': self.network_density
+            },
+            'synchronization_σₛ': {
+                'strongest_pair': strongest_sync[:2],
+                'max_σₛ': strongest_sync[2],
+                'mean_σₛ': float(np.mean(self.sync_matrix[np.triu_indices_from(self.sync_matrix, k=1)]))
+            },
+            'hub_nodes': hub_nodes,
+            'has_clusters': self.clusters is not None
+        }
+        
+        # Add interaction tensor info if available
+        if self.get_interaction_tensor() is not None:
+            tensor = self.get_interaction_tensor()
+            summary['interaction_tensor'] = {
+                'shape': tensor.shape,
+                'max_|β|': float(np.max(np.abs(tensor))),
+                'n_significant': int(np.sum(np.abs(tensor) > 0.1))
+            }
+        
+        return summary
 
 
 @dataclass
@@ -418,7 +534,7 @@ class RegimeInfo:
         labels: Regime label for each time point
         n_regimes: Number of detected regimes
         regime_stats: Statistics for each regime
-        transition_points: Indices where regime changes occur
+        transition_points: Indices where regime changes occur (ΔΛC singularities)
         regime_names: Descriptive names for regimes
     """
     labels: np.ndarray
@@ -456,7 +572,7 @@ class RegimeInfo:
     
     @property
     def transition_matrix(self) -> np.ndarray:
-        """Calculate regime transition probability matrix"""
+        """Calculate regime transition probability matrix P(Λᵢ→Λⱼ)"""
         trans_mat = np.zeros((self.n_regimes, self.n_regimes))
         for i in range(len(self.labels) - 1):
             from_regime = self.labels[i]
@@ -481,8 +597,18 @@ class RegimeInfo:
         return f"Regime-{regime_id}"
     
     def is_stable_period(self, start: int, end: int) -> bool:
-        """Check if period has no regime changes"""
+        """Check if period has no regime changes (stable Λ)"""
         return len(set(self.labels[start:end])) == 1
+    
+    def get_lambda3_regime_description(self) -> Dict[str, Any]:
+        """Get Lambda³ theoretical description of regimes"""
+        return {
+            'n_regimes': self.n_regimes,
+            'transition_points': self.transition_points,
+            'regime_persistence': self.regime_durations,
+            'transition_matrix': self.transition_matrix.tolist(),
+            'interpretation': 'Quasi-stable states of structural tensor Λ'
+        }
 
 
 @dataclass
@@ -508,7 +634,7 @@ class L3Summary:
     config_summary: Optional[Dict[str, Any]] = None
     
     def to_text(self) -> str:
-        """Generate text summary"""
+        """Generate text summary with Lambda³ annotations"""
         lines = [
             f"Lambda³ Analysis Summary",
             f"Generated: {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
@@ -534,7 +660,18 @@ class L3Summary:
                 f"  Bayesian chains: {self.config_summary.get('num_chains', 'N/A')}",
                 f"  Samples per chain: {self.config_summary.get('draws', 'N/A')}",
                 f"  Feature window: {self.config_summary.get('window', 'N/A')}",
+                f"  JAX 64-bit: {self.config_summary.get('enable_x64', True)}",
             ])
+        
+        lines.extend([
+            f"",
+            f"Lambda³ Theory Components:",
+            f"  Λ: Structural tensor",
+            f"  ΔΛC±: Jump events (structural changes)",
+            f"  ρT: Tension scalar (local volatility)",
+            f"  σₛ: Synchronization rate",
+            f"  β: Interaction coefficients"
+        ])
         
         return "\n".join(lines)
     
