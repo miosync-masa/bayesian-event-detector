@@ -1419,7 +1419,6 @@ def create_analysis_dashboard(
     else:
         plt.show()
 
-
 # ===============================
 # Posterior Predictive Check Plots
 # ===============================
@@ -1517,16 +1516,9 @@ def plot_posterior_predictive_check(
     else:
         plt.show()
 
-
 # ===============================
 # Posterior Distribution Plots
 # ===============================
-
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from typing import Dict, List, Optional, Tuple, Any
-import jax.numpy as jnp
 
 def plot_posterior_distributions_lambda3(
     samples: Dict[str, np.ndarray],
@@ -1702,10 +1694,13 @@ def plot_lambda3_posterior_grid(
                                        edgecolor='darkblue', linewidth=0.5)
         
         # Add smooth density curve (optional)
-        from scipy import stats
-        kde = stats.gaussian_kde(param_samples)
-        x_smooth = np.linspace(param_samples.min(), param_samples.max(), 200)
-        ax.plot(x_smooth, kde(x_smooth), 'b-', linewidth=2, alpha=0.8)
+        try:
+            from scipy import stats
+            kde = stats.gaussian_kde(param_samples)
+            x_smooth = np.linspace(param_samples.min(), param_samples.max(), 200)
+            ax.plot(x_smooth, kde(x_smooth), 'b-', linewidth=2, alpha=0.8)
+        except ImportError:
+            pass  # Skip KDE if scipy not available
         
         # Mark HDI region
         ax.axvspan(hdi_low, hdi_high, alpha=0.2, color='gray')
@@ -1791,10 +1786,13 @@ def plot_lambda3_trace_and_density(
                 alpha=0.7, color='skyblue', edgecolor='darkblue')
         
         # Add KDE
-        from scipy import stats
-        kde = stats.gaussian_kde(param_samples)
-        x_smooth = np.linspace(param_samples.min(), param_samples.max(), 200)
-        ax2.plot(x_smooth, kde(x_smooth), 'b-', linewidth=2)
+        try:
+            from scipy import stats
+            kde = stats.gaussian_kde(param_samples)
+            x_smooth = np.linspace(param_samples.min(), param_samples.max(), 200)
+            ax2.plot(x_smooth, kde(x_smooth), 'b-', linewidth=2)
+        except ImportError:
+            pass  # Skip KDE if scipy not available
         
         # Calculate and show HDI
         sorted_samples = np.sort(param_samples)
@@ -1813,35 +1811,11 @@ def plot_lambda3_trace_and_density(
         plt.tight_layout()
         plt.show()
 
-# Example usage function
-def demo_lambda3_posteriors():
-    """Demo function showing how to use the posterior plotting functions"""
-    
-    # Generate sample data (replace with actual MCMC samples)
-    np.random.seed(42)
-    
-    samples = {
-        'beta_time': np.random.normal(140, 10, 1000),
-        'beta_dLC_pos': np.random.normal(-7.8, 2, 1000),
-        'beta_dLC_neg': np.random.normal(-6.9, 1.5, 1000),
-        'beta_interact_stress': np.random.normal(23, 0.5, 1000),
-        'beta_interact_pos': np.random.normal(-0.36, 0.2, 1000),
-        'beta_interact_neg': np.random.normal(-1.6, 0.3, 1000)
-    }
-    
-    # Create results dict
-    results = {'samples': samples}
-    
-    # Plot in Lambda³ style (as shown in the image)
-    print("Plotting Lambda³ posterior distributions...")
-    plot_lambda3_posterior_grid(results, hdi_prob=0.94)
-    
-    # Alternative: plot with trace plots
-    print("\nPlotting trace and density plots...")
-    plot_lambda3_trace_and_density(samples, param_names=['beta_time', 'beta_dLC_pos'])
 
+# ===============================
+# Integration Functions
+# ===============================
 
-# Integration with NumPyro results
 def plot_numpyro_lambda3_posteriors(numpyro_results: Dict[str, Any]):
     """
     Plot posteriors from NumPyro Lambda³ analysis results.
@@ -1878,6 +1852,28 @@ def plot_numpyro_lambda3_posteriors(numpyro_results: Dict[str, Any]):
             plot_lambda3_posterior_grid(plot_results, hdi_prob=0.94)
 
 
-if __name__ == "__main__":
-    # Run demo
-    demo_lambda3_posteriors()
+def demo_lambda3_posteriors():
+    """Demo function showing how to use the posterior plotting functions"""
+    
+    # Generate sample data (replace with actual MCMC samples)
+    np.random.seed(42)
+    
+    samples = {
+        'beta_time': np.random.normal(140, 10, 1000),
+        'beta_dLC_pos': np.random.normal(-7.8, 2, 1000),
+        'beta_dLC_neg': np.random.normal(-6.9, 1.5, 1000),
+        'beta_interact_stress': np.random.normal(23, 0.5, 1000),
+        'beta_interact_pos': np.random.normal(-0.36, 0.2, 1000),
+        'beta_interact_neg': np.random.normal(-1.6, 0.3, 1000)
+    }
+    
+    # Create results dict
+    results = {'samples': samples}
+    
+    # Plot in Lambda³ style (as shown in the image)
+    print("Plotting Lambda³ posterior distributions...")
+    plot_lambda3_posterior_grid(results, hdi_prob=0.94)
+    
+    # Alternative: plot with trace plots
+    print("\nPlotting trace and density plots...")
+    plot_lambda3_trace_and_density(samples, param_names=['beta_time', 'beta_dLC_pos'])
