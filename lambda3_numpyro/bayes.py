@@ -20,6 +20,9 @@ from typing import Dict, Optional, Any, List, Tuple, Union
 from .config import L3Config, BayesianConfig
 from .types import Lambda3FeatureSet, BayesianResults
 
+# Enable JAX 64-bit computation for precision
+jax.config.update("jax_enable_x64", True)
+
 
 # ===============================
 # NumPyro Model Definitions
@@ -29,45 +32,68 @@ def lambda3_base_model(
     features_dict: Dict[str, jnp.ndarray],
     y_obs: Optional[jnp.ndarray] = None,
     change_points: Optional[List[int]] = None,
-    window_size: int = 50
+    prior_scales: Optional[Dict[str, float]] = None
 ):
     """
     Base Lambda³ Bayesian model without interactions.
     
     This model captures:
-    - Linear time trend
-    - Jump event effects (positive and negative)
-    - Tension scalar influence
+    - Linear time trend (ΛF: progression vector)
+    - Jump event effects (ΔΛC±: structural changes)
+    - Tension scalar influence (ρT: local volatility)
+    - Local jump effects (local ΔΛC pulsations)
     
     Args:
         features_dict: Dictionary of feature arrays
         y_obs: Observed data
         change_points: Known structural change points
-        window_size: Window for local parameter estimation
+        prior_scales: Custom prior scales for parameters
     """
+    # Default prior scales
+    if prior_scales is None:
+        prior_scales = {
+            'innovation_scale': 0.1,
+            'beta_dLC_pos': 5.0,
+            'beta_dLC_neg': 5.0,
+            'beta_rhoT': 3.0,
+            'beta_local_jump': 2.0,
+            'sigma_base': 1.0,
+            'sigma_scale': 0.5
+        }
+    
     # Get data length
     n = len(y_obs) if y_obs is not None else len(features_dict['time_trend'])
     time_idx = jnp.arange(n)
     
     # Time-varying parameter using Gaussian Random Walk
-    innovation_scale = numpyro.sample('innovation_scale', dist.HalfNormal(0.1))
+    innovation_scale = numpyro.sample('innovation_scale', 
+                                    dist.HalfNormal(prior_scales['innovation_scale']))
     beta_time_series = numpyro.sample(
         'beta_time_series',
         dist.GaussianRandomWalk(innovation_scale, num_steps=n)
     )
     
-    # Static coefficients for features
-    beta_dLC_pos = numpyro.sample('beta_dLC_pos', dist.Normal(0.0, 5.0))
-    beta_dLC_neg = numpyro.sample('beta_dLC_neg', dist.Normal(0.0, 5.0))
-    beta_rhoT = numpyro.sample('beta_rhoT', dist.Normal(0.0, 3.0))
+    # Static coefficients for Lambda³ features
+    beta_dLC_pos = numpyro.sample('beta_dLC_pos', 
+                                 dist.Normal(0.0, prior_scales['beta_dLC_pos']))
+    beta_dLC_neg = numpyro.sample('beta_dLC_neg', 
+                                 dist.Normal(0.0, prior_scales['beta_dLC_neg']))
+    beta_rhoT = numpyro.sample('beta_rhoT', 
+                               dist.Normal(0.0, prior_scales['beta_rhoT']))
     
-    # Build mean function
+    # Build mean function with all structural components
     mu = (
         beta_time_series
         + beta_dLC_pos * features_dict['delta_LambdaC_pos']
         + beta_dLC_neg * features_dict['delta_LambdaC_neg']
         + beta_rhoT * features_dict['rho_T']
     )
+    
+    # Add local jump effects (local ΔΛC pulsations)
+    if 'local_jump' in features_dict:
+        beta_local_jump = numpyro.sample('beta_local_jump', 
+                                       dist.Normal(0.0, prior_scales['beta_local_jump']))
+        mu = mu + beta_local_jump * features_dict['local_jump']
     
     # Add structural change jumps
     if change_points:
@@ -76,9 +102,11 @@ def lambda3_base_model(
             # Step function at change point
             mu = mu + jump * (time_idx >= cp)
     
-    # Time-varying volatility (optional)
-    sigma_base = numpyro.sample('sigma_base', dist.HalfNormal(1.0))
-    sigma_scale = numpyro.sample('sigma_scale', dist.HalfNormal(0.5))
+    # Time-varying volatility dependent on tension scalar (ρT)
+    sigma_base = numpyro.sample('sigma_base', 
+                               dist.HalfNormal(prior_scales['sigma_base']))
+    sigma_scale = numpyro.sample('sigma_scale', 
+                                dist.HalfNormal(prior_scales['sigma_scale']))
     sigma_obs = sigma_base + sigma_scale * features_dict['rho_T']
     
     with numpyro.plate('observations', n):
@@ -118,6 +146,7 @@ def lambda3_interaction_model(
             'beta_dLC_neg': 5.0,
             'beta_rhoT': 3.0,
             'beta_interact': 3.0,
+            'beta_local_jump': 2.0,
             'sigma_obs': 1.0
         }
     
@@ -191,8 +220,8 @@ def lambda3_interaction_model(
 def lambda3_dynamic_model(
     features_dict: Dict[str, jnp.ndarray],
     change_points: Optional[List[int]] = None,
-    window_size: int = 50,
-    y_obs: Optional[jnp.ndarray] = None
+    y_obs: Optional[jnp.ndarray] = None,
+    prior_scales: Optional[Dict[str, float]] = None
 ):
     """
     Dynamic Lambda³ model with time-varying parameters.
@@ -200,27 +229,44 @@ def lambda3_dynamic_model(
     This model includes:
     - Time-varying coefficients (Gaussian Random Walk)
     - Structural change points with jump effects
-    - Adaptive volatility
+    - Adaptive volatility based on tension scalar
+    - All Lambda³ features including local jumps
     
     Args:
         features_dict: Dictionary of feature arrays
         change_points: Known structural change points
-        window_size: Window for parameter evolution
         y_obs: Observed data
+        prior_scales: Custom prior scales
     """
+    # Default prior scales
+    if prior_scales is None:
+        prior_scales = {
+            'innovation_scale': 0.1,
+            'beta_dLC_pos': 5.0,
+            'beta_dLC_neg': 5.0,
+            'beta_rhoT': 3.0,
+            'beta_local_jump': 2.0,
+            'sigma_base': 1.0,
+            'sigma_scale': 0.5
+        }
+    
     n = len(y_obs) if y_obs is not None else len(features_dict['time_trend'])
     
     # Time-varying baseline (Gaussian Random Walk)
-    innovation_scale = numpyro.sample('innovation_scale', dist.HalfNormal(0.1))
+    innovation_scale = numpyro.sample('innovation_scale', 
+                                    dist.HalfNormal(prior_scales['innovation_scale']))
     beta_time_series = numpyro.sample(
         'beta_time_series',
         dist.GaussianRandomWalk(innovation_scale, num_steps=n)
     )
     
     # Static coefficients for structural features
-    beta_dLC_pos = numpyro.sample('beta_dLC_pos', dist.Normal(0.0, 5.0))
-    beta_dLC_neg = numpyro.sample('beta_dLC_neg', dist.Normal(0.0, 5.0))
-    beta_rhoT = numpyro.sample('beta_rhoT', dist.Normal(0.0, 3.0))
+    beta_dLC_pos = numpyro.sample('beta_dLC_pos', 
+                                 dist.Normal(0.0, prior_scales['beta_dLC_pos']))
+    beta_dLC_neg = numpyro.sample('beta_dLC_neg', 
+                                 dist.Normal(0.0, prior_scales['beta_dLC_neg']))
+    beta_rhoT = numpyro.sample('beta_rhoT', 
+                               dist.Normal(0.0, prior_scales['beta_rhoT']))
     
     # Build mean function with time-varying baseline
     mu = (
@@ -230,9 +276,10 @@ def lambda3_dynamic_model(
         + beta_rhoT * features_dict['rho_T']
     )
     
-    # Add local jump effects if available
+    # Add local jump effects
     if 'local_jump' in features_dict:
-        beta_local_jump = numpyro.sample('beta_local_jump', dist.Normal(0.0, 2.0))
+        beta_local_jump = numpyro.sample('beta_local_jump', 
+                                       dist.Normal(0.0, prior_scales['beta_local_jump']))
         mu = mu + beta_local_jump * features_dict['local_jump']
     
     # Add structural change jumps
@@ -244,8 +291,10 @@ def lambda3_dynamic_model(
             mu = mu + jump * (time_idx >= cp)
     
     # Time-varying volatility dependent on tension scalar
-    sigma_base = numpyro.sample('sigma_base', dist.HalfNormal(1.0))
-    sigma_scale = numpyro.sample('sigma_scale', dist.HalfNormal(0.5))
+    sigma_base = numpyro.sample('sigma_base', 
+                               dist.HalfNormal(prior_scales['sigma_base']))
+    sigma_scale = numpyro.sample('sigma_scale', 
+                                dist.HalfNormal(prior_scales['sigma_scale']))
     sigma_obs = sigma_base + sigma_scale * features_dict['rho_T']
     
     with numpyro.plate('observations', n):
@@ -264,6 +313,7 @@ def lambda3_hierarchical_model(
     - Group-level parameters with partial pooling
     - Series-specific deviations
     - Shared structural patterns
+    - Full Lambda³ feature integration
     
     Args:
         features_list: List of feature dictionaries for each series
@@ -302,6 +352,10 @@ def lambda3_hierarchical_model(
         beta_rhoT = numpyro.sample('beta_rhoT', dist.Normal(mu_beta_rhoT, sigma_beta_rhoT))
         sigma_obs = numpyro.sample('sigma_obs', dist.HalfNormal(1.0))
     
+    # Hyperprior for local jump effects
+    mu_beta_local = numpyro.sample('mu_beta_local', dist.Normal(0.0, 2.0))
+    sigma_beta_local = numpyro.sample('sigma_beta_local', dist.HalfNormal(0.5))
+    
     # Likelihood for each series
     for i in range(n_series):
         features = features_list[i]
@@ -317,15 +371,9 @@ def lambda3_hierarchical_model(
         
         # Add local jump effects if available
         if 'local_jump' in features:
-            # Use shared hyperprior for local jump
-            if i == 0:  # Only sample once
-                mu_beta_local = numpyro.sample('mu_beta_local', dist.Normal(0.0, 2.0))
-                sigma_beta_local = numpyro.sample('sigma_beta_local', dist.HalfNormal(0.5))
-            
-            with numpyro.plate(f'local_jump_{i}', 1):
-                beta_local = numpyro.sample(f'beta_local_{i}', 
-                                          dist.Normal(mu_beta_local, sigma_beta_local))
-                mu = mu + beta_local * features['local_jump']
+            beta_local_i = numpyro.sample(f'beta_local_{i}', 
+                                        dist.Normal(mu_beta_local, sigma_beta_local))
+            mu = mu + beta_local_i * features['local_jump']
         
         with numpyro.plate(f'obs_{i}', len(mu)):
             numpyro.sample(f'y_obs_{i}', dist.Normal(mu, sigma_obs[i]), obs=y_obs)
@@ -363,7 +411,7 @@ def fit_bayesian_model(
     else:
         bayes_config = config
     
-    # Safe extraction of prior_scales
+    # Get prior scales with safe extraction
     prior_scales = getattr(bayes_config, 'prior_scales', {
         'beta_0': 2.0,
         'beta_time': 1.0,
@@ -374,16 +422,16 @@ def fit_bayesian_model(
         'sigma_obs': 1.0
     })
     
-    # Convert features to JAX arrays - exclude 'data' from features_dict
-    data_jax = jnp.asarray(features.data, dtype=jnp.float32)
+    # Convert features to JAX arrays (64-bit enabled)
+    data_jax = jnp.asarray(features.data)
     
     # Create features dictionary without raw data
     features_jax = {
-        'time_trend': jnp.asarray(features.time_trend, dtype=jnp.float32),
-        'delta_LambdaC_pos': jnp.asarray(features.delta_LambdaC_pos, dtype=jnp.float32),
-        'delta_LambdaC_neg': jnp.asarray(features.delta_LambdaC_neg, dtype=jnp.float32),
-        'rho_T': jnp.asarray(features.rho_T, dtype=jnp.float32),
-        'local_jump': jnp.asarray(features.local_jump, dtype=jnp.float32)
+        'time_trend': jnp.asarray(features.time_trend),
+        'delta_LambdaC_pos': jnp.asarray(features.delta_LambdaC_pos),
+        'delta_LambdaC_neg': jnp.asarray(features.delta_LambdaC_neg),
+        'rho_T': jnp.asarray(features.rho_T),
+        'local_jump': jnp.asarray(features.local_jump)
     }
     
     # Prepare interaction terms
@@ -392,9 +440,9 @@ def fit_bayesian_model(
     interaction_rhoT = None
     
     if interaction_features and model_type == 'interaction':
-        interaction_pos = jnp.asarray(interaction_features.delta_LambdaC_pos, dtype=jnp.float32)
-        interaction_neg = jnp.asarray(interaction_features.delta_LambdaC_neg, dtype=jnp.float32)
-        interaction_rhoT = jnp.asarray(interaction_features.rho_T, dtype=jnp.float32)
+        interaction_pos = jnp.asarray(interaction_features.delta_LambdaC_pos)
+        interaction_neg = jnp.asarray(interaction_features.delta_LambdaC_neg)
+        interaction_rhoT = jnp.asarray(interaction_features.rho_T)
     
     # Select model
     if model_type == 'base':
@@ -403,7 +451,7 @@ def fit_bayesian_model(
         model_kwargs = {
             'y_obs': data_jax,
             'change_points': additional_params.get('change_points') if additional_params else None,
-            'window_size': additional_params.get('window_size', 50) if additional_params else 50
+            'prior_scales': prior_scales
         }
     elif model_type == 'interaction':
         model = lambda3_interaction_model
@@ -420,14 +468,15 @@ def fit_bayesian_model(
         model_args = (features_jax,)
         model_kwargs = {
             'change_points': additional_params.get('change_points') if additional_params else None,
-            'window_size': additional_params.get('window_size', 50) if additional_params else 50,
-            'y_obs': data_jax
+            'y_obs': data_jax,
+            'prior_scales': prior_scales
         }
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     
-    # MCMC setup
+    # MCMC setup with proper key splitting for multiple chains
     rng_key = random.PRNGKey(seed)
+    
     kernel = NUTS(
         model,
         target_accept_prob=bayes_config.target_accept,
@@ -444,11 +493,16 @@ def fit_bayesian_model(
         jit_model_args=True
     )
     
-    # Run MCMC
+    # Run MCMC with proper key handling
     print(f"Running MCMC with {bayes_config.num_chains} chains, "
           f"{bayes_config.draws} samples each...")
     
-    mcmc.run(rng_key, *model_args, **model_kwargs)
+    if bayes_config.num_chains > 1:
+        # Split keys for parallel chains
+        rng_keys = random.split(rng_key, bayes_config.num_chains)
+        mcmc.run(rng_keys, *model_args, **model_kwargs)
+    else:
+        mcmc.run(rng_key, *model_args, **model_kwargs)
     
     # Convert to ArviZ
     trace = _convert_to_arviz(mcmc, bayes_config)
@@ -480,7 +534,6 @@ def fit_dynamic_model(
     features: Lambda3FeatureSet,
     config: Union[L3Config, BayesianConfig],
     change_points: Optional[List[int]] = None,
-    window_size: int = 50,
     seed: int = 0
 ) -> BayesianResults:
     """
@@ -490,7 +543,6 @@ def fit_dynamic_model(
         features: Time series features
         config: Configuration
         change_points: Known change points
-        window_size: Window for parameter evolution
         seed: Random seed
         
     Returns:
@@ -498,9 +550,7 @@ def fit_dynamic_model(
     """
     # Auto-detect change points if not provided
     if change_points is None:
-        change_points = detect_change_points_automatic(
-            features.data, window_size
-        )
+        change_points = detect_change_points_automatic(features.data)
         print(f"Auto-detected {len(change_points)} change points: {change_points}")
     
     return fit_bayesian_model(
@@ -509,8 +559,7 @@ def fit_dynamic_model(
         model_type='dynamic',
         seed=seed,
         additional_params={
-            'change_points': change_points,
-            'window_size': window_size
+            'change_points': change_points
         }
     )
 
@@ -541,16 +590,16 @@ def fit_hierarchical_model(
     
     # Convert features to JAX format
     n_series = len(features_list)
-    y_obs_list = [jnp.asarray(feat.data, dtype=jnp.float32) for feat in features_list]
+    y_obs_list = [jnp.asarray(feat.data) for feat in features_list]
     features_jax_list = []
     
     for feat in features_list:
         features_jax_list.append({
-            'time_trend': jnp.asarray(feat.time_trend, dtype=jnp.float32),
-            'delta_LambdaC_pos': jnp.asarray(feat.delta_LambdaC_pos, dtype=jnp.float32),
-            'delta_LambdaC_neg': jnp.asarray(feat.delta_LambdaC_neg, dtype=jnp.float32),
-            'rho_T': jnp.asarray(feat.rho_T, dtype=jnp.float32),
-            'local_jump': jnp.asarray(feat.local_jump, dtype=jnp.float32)
+            'time_trend': jnp.asarray(feat.time_trend),
+            'delta_LambdaC_pos': jnp.asarray(feat.delta_LambdaC_pos),
+            'delta_LambdaC_neg': jnp.asarray(feat.delta_LambdaC_neg),
+            'rho_T': jnp.asarray(feat.rho_T),
+            'local_jump': jnp.asarray(feat.local_jump)
         })
     
     # Set up group IDs
@@ -575,7 +624,13 @@ def fit_hierarchical_model(
     )
     
     print(f"Running hierarchical MCMC for {n_series} series...")
-    mcmc.run(rng_key, features_jax_list, y_obs_list, group_ids)
+    
+    # Run with proper key handling
+    if bayes_config.num_chains > 1:
+        rng_keys = random.split(rng_key, bayes_config.num_chains)
+        mcmc.run(rng_keys, features_jax_list, y_obs_list, group_ids)
+    else:
+        mcmc.run(rng_key, features_jax_list, y_obs_list, group_ids)
     
     # Convert to ArviZ
     trace = _convert_to_arviz(mcmc, bayes_config)
@@ -599,6 +654,12 @@ def fit_hierarchical_model(
             beta_dLC_neg_mean[i] * features_list[i].delta_LambdaC_neg +
             beta_rhoT_mean[i] * features_list[i].rho_T
         )
+        
+        # Add local jump effect if available
+        if f'beta_local_{i}' in posterior:
+            beta_local_mean = posterior[f'beta_local_{i}'].mean(dim=['chain', 'draw']).item()
+            mu = mu + beta_local_mean * features_list[i].local_jump
+        
         predictions_list.append(np.asarray(mu))
     
     # Extract diagnostics
@@ -794,25 +855,14 @@ def calculate_log_likelihood(
     # Calculate for each sample
     for chain in range(n_chains):
         for draw in range(n_draws):
-            # Check which parameter names are available (handle both naming conventions)
-            if 'lambda_intercept' in posterior:
-                # Original naming convention
-                mu = (
-                    posterior['lambda_intercept'][chain, draw].item() +
-                    posterior['lambda_flow'][chain, draw].item() * features.time_trend +
-                    posterior['lambda_struct_pos'][chain, draw].item() * features.delta_LambdaC_pos +
-                    posterior['lambda_struct_neg'][chain, draw].item() * features.delta_LambdaC_neg +
-                    posterior['rho_tension'][chain, draw].item() * features.rho_T
-                )
-            else:
-                # Beta naming convention
-                mu = (
-                    posterior['beta_0'][chain, draw].item() +
-                    posterior['beta_time'][chain, draw].item() * features.time_trend +
-                    posterior['beta_dLC_pos'][chain, draw].item() * features.delta_LambdaC_pos +
-                    posterior['beta_dLC_neg'][chain, draw].item() * features.delta_LambdaC_neg +
-                    posterior['beta_rhoT'][chain, draw].item() * features.rho_T
-                )
+            # Use unified parameter names
+            mu = (
+                posterior['beta_0'][chain, draw].item() +
+                posterior['beta_time'][chain, draw].item() * features.time_trend +
+                posterior['beta_dLC_pos'][chain, draw].item() * features.delta_LambdaC_pos +
+                posterior['beta_dLC_neg'][chain, draw].item() * features.delta_LambdaC_neg +
+                posterior['beta_rhoT'][chain, draw].item() * features.rho_T
+            )
             
             # Add local jump if present
             if 'beta_local_jump' in posterior:
@@ -829,6 +879,8 @@ def calculate_log_likelihood(
                     mu = mu + posterior['beta_dLC_neg'][chain, draw].item() * features.delta_LambdaC_neg
                 if 'beta_rhoT' in posterior:
                     mu = mu + posterior['beta_rhoT'][chain, draw].item() * features.rho_T
+                if 'beta_local_jump' in posterior:
+                    mu = mu + posterior['beta_local_jump'][chain, draw].item() * features.local_jump
             
             # Get observation variance
             sigma = posterior['sigma_obs'][chain, draw].item()
@@ -881,8 +933,8 @@ def posterior_predictive_check(
         chain = idx // n_draws
         draw = idx % n_draws
         
-        # Reconstruct mu
-        mu = results.predictions  # Use pre-computed predictions
+        # Reconstruct mu using actual predictions
+        mu = results.predictions
         
         # Add noise
         sigma = posterior['sigma_obs'][chain, draw].item()
@@ -957,18 +1009,21 @@ def fit_svi_model(
         bayes_config = config
     
     # Prepare data
-    data_jax = jnp.asarray(features.data, dtype=jnp.float32)
+    data_jax = jnp.asarray(features.data)
     features_jax = {
-        'time_trend': jnp.asarray(features.time_trend, dtype=jnp.float32),
-        'delta_LambdaC_pos': jnp.asarray(features.delta_LambdaC_pos, dtype=jnp.float32),
-        'delta_LambdaC_neg': jnp.asarray(features.delta_LambdaC_neg, dtype=jnp.float32),
-        'rho_T': jnp.asarray(features.rho_T, dtype=jnp.float32),
-        'local_jump': jnp.asarray(features.local_jump, dtype=jnp.float32)
+        'time_trend': jnp.asarray(features.time_trend),
+        'delta_LambdaC_pos': jnp.asarray(features.delta_LambdaC_pos),
+        'delta_LambdaC_neg': jnp.asarray(features.delta_LambdaC_neg),
+        'rho_T': jnp.asarray(features.rho_T),
+        'local_jump': jnp.asarray(features.local_jump)
     }
     
     # Select model
     if model_type == 'base':
         model = lambda3_base_model
+        model_kwargs = {
+            'prior_scales': bayes_config.prior_scales
+        }
     else:
         raise ValueError(f"SVI not implemented for model type: {model_type}")
     
@@ -981,14 +1036,14 @@ def fit_svi_model(
     
     # Initialize
     rng_key = random.PRNGKey(seed)
-    svi_state = svi.init(rng_key, features_jax, y_obs=data_jax)
+    svi_state = svi.init(rng_key, features_jax, y_obs=data_jax, **model_kwargs)
     
     # Run optimization
     print(f"Running SVI for {n_steps} steps...")
     losses = []
     
     for step in range(n_steps):
-        svi_state, loss = svi.update(svi_state, features_jax, y_obs=data_jax)
+        svi_state, loss = svi.update(svi_state, features_jax, y_obs=data_jax, **model_kwargs)
         losses.append(loss)
         
         if step % 1000 == 0:
@@ -1129,7 +1184,7 @@ def run_complete_bayesian_analysis(
 
 
 # ===============================
-# Extended Inference Class (Optional)
+# Extended Inference Class
 # ===============================
 
 class Lambda3BayesianInference:
