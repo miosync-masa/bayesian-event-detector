@@ -1,12 +1,12 @@
 """
-Analysis module for Lambda³ framework.
+Analysis module for Lambda³ framework (Key sections refactored).
 
 This module provides high-level analysis functions including
 pairwise analysis, causality detection, and regime identification.
 """
 
 import numpy as np
-from typing import Dict, Tuple, List, Optional, Union
+from typing import Dict, Tuple, List, Optional, Union, Any
 from itertools import combinations
 from sklearn.cluster import AgglomerativeClustering, KMeans
 import networkx as nx
@@ -21,104 +21,118 @@ from .bayes import fit_bayesian_model, check_convergence
 
 
 # ===============================
-# Pairwise Analysis
+# Interaction Matrix Building (FIXED)
 # ===============================
 
-def analyze_pair(
-    name_a: str,
-    name_b: str, 
-    features_a: Lambda3FeatureSet,
-    features_b: Lambda3FeatureSet,
-    config: L3Config,
-    seed: int = 0,
-    check_convergence_flag: bool = True
-) -> AnalysisResult:
+def _build_interaction_matrix(
+    pairwise_results: Dict[Tuple[str, str], AnalysisResult],
+    series_names: List[str],
+    effect_type: str = 'integrated'
+) -> np.ndarray:
     """
-    Comprehensive analysis of a series pair.
-    
-    This function:
-    1. Fits Bayesian models with cross-interactions
-    2. Calculates synchronization profiles
-    3. Detects causality patterns
-    4. Extracts interaction effects
+    Build interaction effect matrix from pairwise results.
     
     Args:
-        name_a, name_b: Series names
-        features_a, features_b: Extracted features
-        config: Configuration
-        seed: Random seed
-        check_convergence_flag: Whether to check MCMC convergence
+        pairwise_results: Dictionary of analysis results for each pair
+        series_names: List of series names
+        effect_type: Type of effect to extract:
+            - 'integrated': Use maximum absolute effect across all types
+            - 'pos': Only positive jump effects
+            - 'neg': Only negative jump effects  
+            - 'stress': Only tension/stress effects
+            
+    Returns:
+        interaction_matrix: N×N matrix of interaction coefficients
+    """
+    n = len(series_names)
+    matrix = np.zeros((n, n))
+    
+    for i, name_i in enumerate(series_names):
+        for j, name_j in enumerate(series_names):
+            if i == j:
+                continue
+            
+            # Find the pair result
+            if (name_i, name_j) in pairwise_results:
+                result = pairwise_results[(name_i, name_j)]
+            elif (name_j, name_i) in pairwise_results:
+                result = pairwise_results[(name_j, name_i)]
+            else:
+                continue
+            
+            # Extract j's effect on i based on effect_type
+            if effect_type == 'integrated':
+                # Get all possible effects and use maximum absolute value
+                effects = []
+                
+                # Positive jumps
+                key_pos = f'{name_j}_to_{name_i}_pos'
+                if key_pos in result.interaction_effects:
+                    effects.append(result.interaction_effects[key_pos])
+                
+                # Negative jumps  
+                key_neg = f'{name_j}_to_{name_i}_neg'
+                if key_neg in result.interaction_effects:
+                    effects.append(result.interaction_effects[key_neg])
+                
+                # Stress/tension
+                key_stress = f'{name_j}_to_{name_i}_stress'
+                if key_stress in result.interaction_effects:
+                    effects.append(result.interaction_effects[key_stress])
+                
+                # Use the effect with maximum absolute value
+                if effects:
+                    max_effect_idx = np.argmax(np.abs(effects))
+                    matrix[i, j] = effects[max_effect_idx]
+                    
+            elif effect_type == 'pos':
+                key = f'{name_j}_to_{name_i}_pos'
+                if key in result.interaction_effects:
+                    matrix[i, j] = result.interaction_effects[key]
+                    
+            elif effect_type == 'neg':
+                key = f'{name_j}_to_{name_i}_neg'
+                if key in result.interaction_effects:
+                    matrix[i, j] = result.interaction_effects[key]
+                    
+            elif effect_type == 'stress':
+                key = f'{name_j}_to_{name_i}_stress'
+                if key in result.interaction_effects:
+                    matrix[i, j] = result.interaction_effects[key]
+            else:
+                raise ValueError(f"Unknown effect_type: {effect_type}")
+    
+    return matrix
+
+
+def build_multi_effect_tensor(
+    pairwise_results: Dict[Tuple[str, str], AnalysisResult],
+    series_names: List[str]
+) -> np.ndarray:
+    """
+    Build 3D tensor containing all interaction effect types.
+    
+    Args:
+        pairwise_results: Dictionary of analysis results
+        series_names: List of series names
         
     Returns:
-        AnalysisResult: Complete analysis results
+        interaction_tensor: N×N×3 tensor where third dimension is [pos, neg, stress]
     """
-    print(f"\nAnalyzing pair: {name_a} ↔ {name_b}")
+    n = len(series_names)
+    tensor = np.zeros((n, n, 3))
     
-    # Fit model for series A (with B's influence)
-    print(f"  Fitting model for {name_a} (with {name_b} interactions)...")
-    results_a = fit_bayesian_model(
-        features=features_a,
-        config=config,
-        interaction_features=features_b,
-        model_type='interaction',
-        seed=seed * 1000
-    )
+    # Build matrices for each effect type
+    tensor[:, :, 0] = _build_interaction_matrix(pairwise_results, series_names, 'pos')
+    tensor[:, :, 1] = _build_interaction_matrix(pairwise_results, series_names, 'neg')
+    tensor[:, :, 2] = _build_interaction_matrix(pairwise_results, series_names, 'stress')
     
-    if check_convergence_flag:
-        check_convergence(results_a, verbose=False)
-    
-    # Fit model for series B (with A's influence)
-    print(f"  Fitting model for {name_b} (with {name_a} interactions)...")
-    results_b = fit_bayesian_model(
-        features=features_b,
-        config=config,
-        interaction_features=features_a,
-        model_type='interaction',
-        seed=seed * 1000 + 1
-    )
-    
-    if check_convergence_flag:
-        check_convergence(results_b, verbose=False)
-    
-    # Calculate synchronization profile
-    sync_profile = calculate_sync_profile(
-        features_a.delta_LambdaC_pos,
-        features_b.delta_LambdaC_pos,
-        config.feature.lag_window,
-        series_names=(name_a, name_b)
-    )
-    
-    # Extract interaction effects
-    interaction_effects = _extract_interaction_effects(
-        results_a, results_b, name_a, name_b
-    )
-    
-    # Calculate causality profiles
-    causality_profiles = {
-        name_a: _calculate_causality_profile(features_a, features_b, name_a, name_b),
-        name_b: _calculate_causality_profile(features_b, features_a, name_b, name_a)
-    }
-    
-    # Import necessary for analysis
-    from datetime import datetime
-    metadata = {
-        'name_a': name_a,
-        'name_b': name_b,
-        'seed': seed,
-        'sync_rate': sync_profile.max_sync_rate,
-        'optimal_lag': sync_profile.optimal_lag,
-        'primary_effect': max(interaction_effects.items(), key=lambda x: abs(x[1]))[0] if interaction_effects else None
-    }
-    
-    return AnalysisResult(
-        trace_a=results_a,
-        trace_b=results_b,
-        sync_profile=sync_profile,
-        interaction_effects=interaction_effects,
-        causality_profiles=causality_profiles,
-        metadata=metadata
-    )
+    return tensor
 
+
+# ===============================
+# Enhanced CrossAnalysisResult Creation
+# ===============================
 
 def analyze_multiple_series(
     features_dict: Dict[str, Lambda3FeatureSet],
@@ -168,15 +182,20 @@ def analyze_multiple_series(
             pairs, features_dict, config, show_progress
         )
     
-    # Build synchronization matrix
+    # Build synchronization matrix (σₛ matrix in Lambda³ theory)
     print("\nBuilding synchronization matrix...")
     sync_mat, _ = sync_matrix(
         {name: feat.delta_LambdaC_pos for name, feat in features_dict.items()},
         config.feature.lag_window
     )
     
-    # Build interaction matrix
-    interaction_matrix = _build_interaction_matrix(pairwise_results, series_names)
+    # Build interaction matrix with integrated effects
+    interaction_matrix = _build_interaction_matrix(
+        pairwise_results, series_names, effect_type='integrated'
+    )
+    
+    # Build full interaction tensor for detailed analysis
+    interaction_tensor = build_multi_effect_tensor(pairwise_results, series_names)
     
     # Build synchronization network
     print("Building synchronization network...")
@@ -191,12 +210,21 @@ def analyze_multiple_series(
     if n_series > 2:
         clusters = _cluster_series(sync_mat, series_names, n_clusters=min(3, n_series // 2))
     
-    # Create metadata
+    # Create metadata with theory annotations
     metadata = {
         'series_names': series_names,
         'n_pairs_analyzed': len(pairwise_results),
-        'config': config.to_dict()
+        'config': config.to_dict(),
+        'interaction_tensor_shape': interaction_tensor.shape,
+        'lambda3_annotations': {
+            'sync_matrix': 'σₛ matrix - synchronization rates',
+            'interaction_matrix': 'Integrated β coefficients (max |β| across ΔΛC±, ρT)',
+            'interaction_tensor': 'Full tensor [N×N×3] for [pos, neg, stress] effects'
+        }
     }
+    
+    # Store tensor in metadata for access
+    metadata['interaction_tensor'] = interaction_tensor
     
     return CrossAnalysisResult(
         pairwise_results=pairwise_results,
@@ -209,197 +237,244 @@ def analyze_multiple_series(
 
 
 # ===============================
-# Causality Analysis
+# Remove Unused Function
 # ===============================
 
-def _calculate_causality_profile(
-    features_self: Lambda3FeatureSet,
-    features_other: Lambda3FeatureSet,
-    name_self: str,
-    name_other: str,
-    max_lag: int = 10
-) -> CausalityProfile:
+# The _export_pdf_report function has been removed as it was not implemented
+
+
+# ===============================
+# Export Functions (Updated)
+# ===============================
+
+def export_analysis_report(
+    results: Union[AnalysisResult, CrossAnalysisResult, Dict[str, Any]],
+    output_path: Union[str, Path],
+    format: str = 'html'
+) -> None:
     """
-    Calculate causality profile for a series.
+    Export analysis results as a formatted report.
     
     Args:
-        features_self: Features of primary series
-        features_other: Features of other series
-        name_self: Name of primary series
-        name_other: Name of other series
-        max_lag: Maximum lag to consider
+        results: Analysis results
+        output_path: Output file path
+        format: 'html' or 'markdown' (pdf support removed)
+    """
+    output_path = Path(output_path)
+    
+    if format == 'html':
+        _export_html_report(results, output_path)
+    elif format == 'markdown':
+        _export_markdown_report(results, output_path)
+    else:
+        raise ValueError(f"Unsupported format: {format}. Use 'html' or 'markdown'")
+    
+    print(f"Report exported to {output_path}")
+
+
+# ===============================
+# Summary Generation with Theory Labels
+# ===============================
+
+def generate_analysis_summary(
+    cross_results: CrossAnalysisResult,
+    features_dict: Dict[str, Lambda3FeatureSet]
+) -> List[str]:
+    """
+    Generate key findings from analysis results with Lambda³ theory annotations.
+    
+    Args:
+        cross_results: Cross-analysis results
+        features_dict: Original features
         
     Returns:
-        CausalityProfile: Causality analysis results
+        List of key findings
     """
-    # Self-causality: P(negative jump | positive jump)
-    self_causality = {}
-    pos_jumps = features_self.delta_LambdaC_pos
-    neg_jumps = features_self.delta_LambdaC_neg
+    findings = []
     
-    for lag in range(1, max_lag + 1):
-        count_pos = 0
-        count_pairs = 0
-        
-        for t in range(len(pos_jumps) - lag):
-            if pos_jumps[t] > 0:
-                count_pos += 1
-                if neg_jumps[t + lag] > 0:
-                    count_pairs += 1
-        
-        self_causality[lag] = count_pairs / max(count_pos, 1)
+    # Find strongest synchronization (σₛ)
+    sync_mat = cross_results.sync_matrix
+    series_names = cross_results.get_series_names()
     
-    # Cross-causality: P(self event | other event)
-    cross_causality = {}
-    other_pos = features_other.delta_LambdaC_pos
+    # Get off-diagonal max
+    np.fill_diagonal(sync_mat, 0)
+    max_sync_idx = np.unravel_index(np.argmax(sync_mat), sync_mat.shape)
+    max_sync = sync_mat[max_sync_idx]
     
-    for lag in range(1, max_lag + 1):
-        count_other = 0
-        count_cross = 0
-        
-        for t in range(len(other_pos) - lag):
-            if other_pos[t] > 0:
-                count_other += 1
-                if pos_jumps[t + lag] > 0:
-                    count_cross += 1
-        
-        cross_causality[lag] = count_cross / max(count_other, 1)
+    if max_sync > 0.3:
+        findings.append(
+            f"Strongest synchronization: {series_names[max_sync_idx[0]]} ↔ "
+            f"{series_names[max_sync_idx[1]]} (σₛ = {max_sync:.3f})"
+        )
     
-    return CausalityProfile(
-        self_causality=self_causality,
-        cross_causality=cross_causality,
-        series_names=(name_self, name_other)
-    )
+    # Find strongest interaction across all effect types
+    if 'interaction_tensor' in cross_results.metadata:
+        tensor = cross_results.metadata['interaction_tensor']
+        
+        # Find maximum absolute effect across all types
+        abs_tensor = np.abs(tensor)
+        max_idx = np.unravel_index(np.argmax(abs_tensor), abs_tensor.shape)
+        max_effect = tensor[max_idx]
+        effect_types = ['ΔΛC⁺', 'ΔΛC⁻', 'ρT']
+        
+        findings.append(
+            f"Strongest interaction: {series_names[max_idx[1]]} → "
+            f"{series_names[max_idx[0]]} via {effect_types[max_idx[2]]} "
+            f"(β = {max_effect:.3f})"
+        )
+    else:
+        # Fallback to integrated matrix
+        int_mat = cross_results.interaction_matrix
+        np.fill_diagonal(int_mat, 0)
+        max_int_idx = np.unravel_index(np.argmax(np.abs(int_mat)), int_mat.shape)
+        max_int = int_mat[max_int_idx]
+        
+        if abs(max_int) > 0.1:
+            findings.append(
+                f"Strongest interaction: {series_names[max_int_idx[1]]} → "
+                f"{series_names[max_int_idx[0]]} (β = {max_int:.3f})"
+            )
+    
+    # Network statistics
+    if cross_results.network:
+        n_edges = cross_results.network.number_of_edges()
+        n_nodes = cross_results.network.number_of_nodes()
+        density = n_edges / (n_nodes * (n_nodes - 1)) if n_nodes > 1 else 0
+        
+        findings.append(
+            f"Network density: {density:.1%} ({n_edges} edges)"
+        )
+        
+        # Find hub nodes
+        in_degrees = dict(cross_results.network.in_degree())
+        if in_degrees:
+            hub = max(in_degrees.items(), key=lambda x: x[1])
+            if hub[1] > 1:
+                findings.append(f"Primary hub: {hub[0]} (in-degree: {hub[1]})")
+    
+    # Clustering insights
+    if cross_results.clusters:
+        n_clusters = len(set(cross_results.clusters.values()))
+        findings.append(f"Series grouped into {n_clusters} synchronization clusters")
+    
+    # Add Lambda³ theory interpretation
+    findings.append("Note: σₛ = synchronization rate, β = interaction coefficient")
+    
+    return findings
 
 
-def calculate_causality_matrix(
+# ===============================
+# Helper Functions (Fixed plate usage)
+# ===============================
+
+def _analyze_pairs_sequential(
+    pairs: List[Tuple[str, str]],
     features_dict: Dict[str, Lambda3FeatureSet],
-    lag: int = 1,
-    event_type: str = 'pos'
-) -> Tuple[np.ndarray, List[str]]:
-    """
-    Calculate causality matrix for all series.
-    
-    Args:
-        features_dict: Features for all series
-        lag: Time lag for causality
-        event_type: 'pos' or 'neg' jumps
-        
-    Returns:
-        causality_matrix: N×N matrix of causality strengths
-        series_names: List of series names
-    """
-    series_names = list(features_dict.keys())
-    n = len(series_names)
-    causality_mat = np.zeros((n, n))
-    
-    for i, name_i in enumerate(series_names):
-        for j, name_j in enumerate(series_names):
-            if i == j:
-                # Self-causality on diagonal
-                features = features_dict[name_i]
-                if event_type == 'pos':
-                    events = features.delta_LambdaC_pos
-                    response = features.delta_LambdaC_neg
-                else:
-                    events = features.delta_LambdaC_neg
-                    response = features.delta_LambdaC_pos
-                
-                count_events = 0
-                count_response = 0
-                
-                for t in range(len(events) - lag):
-                    if events[t] > 0:
-                        count_events += 1
-                        if response[t + lag] > 0:
-                            count_response += 1
-                
-                causality_mat[i, j] = count_response / max(count_events, 1)
-            else:
-                # Cross-causality
-                features_cause = features_dict[name_j]
-                features_effect = features_dict[name_i]
-                
-                if event_type == 'pos':
-                    cause_events = features_cause.delta_LambdaC_pos
-                    effect_events = features_effect.delta_LambdaC_pos
-                else:
-                    cause_events = features_cause.delta_LambdaC_neg
-                    effect_events = features_effect.delta_LambdaC_neg
-                
-                count_cause = 0
-                count_effect = 0
-                
-                for t in range(len(cause_events) - lag):
-                    if cause_events[t] > 0:
-                        count_cause += 1
-                        if effect_events[t + lag] > 0:
-                            count_effect += 1
-                
-                causality_mat[i, j] = count_effect / max(count_cause, 1)
-    
-    return causality_mat, series_names
-
-
-# ===============================
-# Advanced Analysis Functions
-# ===============================
-
-def analyze_with_changepoints(
-    features: Lambda3FeatureSet,
     config: L3Config,
-    auto_detect: bool = True,
-    change_points: Optional[List[int]] = None
-) -> Dict[str, Any]:
-    """
-    Analyze series with structural change points.
+    show_progress: bool
+) -> Dict[Tuple[str, str], AnalysisResult]:
+    """Sequential pairwise analysis."""
+    results = {}
     
-    Args:
-        features: Lambda³ features
-        config: Configuration
-        auto_detect: Whether to auto-detect change points
-        change_points: Manual change points (if not auto-detecting)
+    for i, (name_a, name_b) in enumerate(pairs, 1):
+        if show_progress:
+            print(f"\n[{i}/{len(pairs)}] Analyzing: {name_a} ↔ {name_b}")
         
-    Returns:
-        Analysis results including change points
-    """
-    from .bayes import detect_change_points_automatic, fit_dynamic_model
+        try:
+            result = analyze_pair(
+                name_a, name_b,
+                features_dict[name_a],
+                features_dict[name_b],
+                config,
+                seed=i
+            )
+            results[(name_a, name_b)] = result
+            
+            if show_progress:
+                print(f"  ✓ Sync rate (σₛ): {result.sync_profile.max_sync_rate:.3f}")
+                print(f"  ✓ Primary effect: {result.metadata.get('primary_effect', 'None')}")
+        
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            continue
     
-    # Detect change points if needed
-    if auto_detect and change_points is None:
-        print("Auto-detecting change points...")
-        change_points = detect_change_points_automatic(features.data)
-        print(f"Detected {len(change_points)} change points: {change_points}")
+    return results
+
+
+def _analyze_pairs_parallel(
+    pairs: List[Tuple[str, str]],
+    features_dict: Dict[str, Lambda3FeatureSet],
+    config: L3Config,
+    show_progress: bool
+) -> Dict[Tuple[str, str], AnalysisResult]:
+    """Parallel pairwise analysis (placeholder for future implementation)."""
+    # For now, fall back to sequential
+    print("Note: Parallel analysis not yet implemented, using sequential")
+    return _analyze_pairs_sequential(pairs, features_dict, config, show_progress)
+
+
+def _cluster_series(
+    sync_mat: np.ndarray,
+    series_names: List[str],
+    n_clusters: int
+) -> Dict[str, int]:
+    """Cluster series based on synchronization patterns."""
+    # Use 1 - sync as distance
+    distance_mat = 1 - sync_mat
     
-    # Fit dynamic model with change points
-    dynamic_results = fit_dynamic_model(
-        features, config, change_points=change_points
+    # Hierarchical clustering
+    clustering = AgglomerativeClustering(
+        n_clusters=n_clusters,
+        metric='precomputed',
+        linkage='average'
     )
     
-    # Analyze each segment between change points
-    segments = []
-    boundaries = [0] + change_points + [len(features.data)]
+    labels = clustering.fit_predict(distance_mat)
     
-    for i in range(len(boundaries) - 1):
-        start, end = boundaries[i], boundaries[i + 1]
-        segment_data = features.data[start:end]
-        
-        segments.append({
-            'start': start,
-            'end': end,
-            'length': end - start,
-            'mean': np.mean(segment_data),
-            'std': np.std(segment_data),
-            'trend': np.polyfit(range(len(segment_data)), segment_data, 1)[0] if len(segment_data) > 1 else 0
-        })
-    
-    return {
-        'dynamic_results': dynamic_results,
-        'change_points': change_points,
-        'segments': segments,
-        'n_segments': len(segments)
-    }
+    return {name: int(label) for name, label in zip(series_names, labels)}
 
+
+def _name_regimes(regime_stats: Dict[int, Dict[str, float]]) -> Dict[int, str]:
+    """Generate descriptive names for regimes based on characteristics."""
+    names = {}
+    
+    for regime_id, stats in regime_stats.items():
+        characteristics = []
+        
+        # Tension level (ρT)
+        mean_tensions = [s['mean_tension'] for s in regime_stats.values()]
+        avg_tension = np.mean(mean_tensions)
+        
+        if stats['mean_tension'] > avg_tension * 1.5:
+            characteristics.append("High-ρT")
+        elif stats['mean_tension'] < avg_tension * 0.5:
+            characteristics.append("Low-ρT")
+        
+        # Jump activity (ΔΛC)
+        total_jumps = stats['jump_rate_pos'] + stats['jump_rate_neg']
+        if total_jumps > 0.1:
+            characteristics.append("Volatile")
+        elif total_jumps < 0.02:
+            characteristics.append("Stable")
+        
+        # Direction bias
+        if stats['jump_rate_pos'] > stats['jump_rate_neg'] * 1.5:
+            characteristics.append("ΔΛC⁺-dominant")
+        elif stats['jump_rate_neg'] > stats['jump_rate_pos'] * 1.5:
+            characteristics.append("ΔΛC⁻-dominant")
+        
+        # Create name
+        if characteristics:
+            names[regime_id] = "-".join(characteristics)
+        else:
+            names[regime_id] = f"Regime-{regime_id + 1}"
+    
+    return names
+
+
+# ===============================
+# Complete Analysis Pipeline Functions
+# ===============================
 
 def run_comprehensive_analysis(
     features_dict: Dict[str, Lambda3FeatureSet],
@@ -421,6 +496,8 @@ def run_comprehensive_analysis(
     Returns:
         Comprehensive analysis results
     """
+    from datetime import datetime
+    
     results = {
         'timestamp': datetime.now().isoformat(),
         'n_series': len(features_dict),
@@ -493,7 +570,7 @@ def run_comprehensive_analysis(
 
 
 def _generate_comprehensive_summary(results: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate summary of comprehensive analysis."""
+    """Generate summary of comprehensive analysis with Lambda³ annotations."""
     summary = {
         'n_series': results['n_series'],
         'series_names': results['series_names'],
@@ -503,9 +580,17 @@ def _generate_comprehensive_summary(results: Dict[str, Any]) -> Dict[str, Any]:
     # Cross-analysis summary
     if 'cross_analysis' in results:
         cross = results['cross_analysis']
-        summary['n_significant_interactions'] = np.sum(
-            np.abs(cross.interaction_matrix) > 0.1
-        )
+        
+        # Access interaction tensor from metadata
+        if 'interaction_tensor' in cross.metadata:
+            tensor = cross.metadata['interaction_tensor']
+            summary['n_significant_interactions'] = np.sum(np.abs(tensor) > 0.1)
+            summary['max_interaction_strength'] = np.max(np.abs(tensor))
+        else:
+            summary['n_significant_interactions'] = np.sum(
+                np.abs(cross.interaction_matrix) > 0.1
+            )
+        
         summary['max_sync_rate'] = np.max(
             cross.sync_matrix[np.triu_indices_from(cross.sync_matrix, k=1)]
         )
@@ -534,8 +619,15 @@ def _generate_comprehensive_summary(results: Dict[str, Any]) -> Dict[str, Any]:
     if 'bayesian' in results:
         summary['best_bayesian_model'] = results['bayesian']['best_model']
     
+    # Add Lambda³ theory annotations
+    summary['lambda3_metrics'] = {
+        'sync_metric': 'σₛ (synchronization rate)',
+        'interaction_metric': 'β (structural coupling coefficient)',
+        'causality_metric': 'P(ΔΛC⁻|ΔΛC⁺) (structural causality)',
+        'tension_metric': 'ρT (local volatility/stress)'
+    }
+    
     return summary
-
 
 # ===============================
 # Export Results Functions
