@@ -1522,7 +1522,7 @@ def predict_with_model(
 # SVI実装
 def fit_svi_lambda3_numpyro(features: Dict[str, jnp.ndarray],
                            y_obs: jnp.ndarray,
-                           config: L3ConfigNumPyro,
+                           config: L3Config,
                            n_steps: int = 5000) -> Dict[str, Any]:
     """SVI（変分推論）によるLambda³モデルフィッティング"""
     from numpyro.infer import SVI, Trace_ELBO
