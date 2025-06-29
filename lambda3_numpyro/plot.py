@@ -18,10 +18,11 @@ except ImportError:
 import numpy as np
 from typing import Dict, List, Optional, Union, Tuple, Any
 from pathlib import Path
+from datetime import datetime
 
 from .types import (
     Lambda3FeatureSet, AnalysisResult, CrossAnalysisResult,
-    SyncProfile, RegimeInfo
+    SyncProfile, CausalityProfile, RegimeInfo
 )
 from .config import PlottingConfig
 
@@ -350,9 +351,9 @@ def _plot_interaction_effects(
 
 def _plot_causality_profiles(
     ax: Any,
-    causality_profiles: Dict[str, Any]
+    causality_profiles: Dict[str, CausalityProfile]
 ) -> None:
-    """Plot causality profiles."""
+    """Plot causality profiles with enhanced visualization."""
     colors = plt.cm.tab10(np.arange(len(causality_profiles)))
     
     for idx, (name, profile) in enumerate(causality_profiles.items()):
@@ -361,13 +362,24 @@ def _plot_causality_profiles(
             probs = [profile.self_causality[lag] for lag in lags]
             
             ax.plot(lags, probs, 'o-', color=colors[idx], 
-                   label=f'{name} self', markersize=4)
+                   label=f'{name} self', markersize=6)
+            
+            # Mark maximum causality
+            if hasattr(profile, 'max_causality_lag'):
+                max_lag = profile.max_causality_lag
+                max_strength = profile.max_causality_strength
+                ax.scatter(max_lag, max_strength, s=100, color=colors[idx],
+                          marker='*', edgecolor='black', linewidth=1)
             
             # Also plot cross-causality if available
             if profile.cross_causality:
                 cross_probs = [profile.cross_causality[lag] for lag in lags]
                 ax.plot(lags, cross_probs, 's--', color=colors[idx],
                        label=f'{name} cross', markersize=4, alpha=0.7)
+    
+    # Add significance threshold
+    ax.axhline(y=0.3, color='red', linestyle=':', alpha=0.5, 
+               label='Significance threshold')
     
     ax.set_xlabel('Lag')
     ax.set_ylabel('Causality Probability')
@@ -719,6 +731,353 @@ def plot_regimes(
 
 
 # ===============================
+# Change Point Visualization
+# ===============================
+
+def plot_changepoint_analysis(
+    features: Lambda3FeatureSet,
+    changepoint_results: Dict[str, Any],
+    save_path: Optional[Union[str, Path]] = None,
+    config: Optional[PlottingConfig] = None
+) -> None:
+    """
+    Plot time series with detected change points and segments.
+    
+    Args:
+        features: Lambda³ features
+        changepoint_results: Results from analyze_with_changepoints
+        save_path: Path to save figure
+        config: Plotting configuration
+    """
+    _check_plotting()
+    
+    if config is None:
+        config = PlottingConfig()
+    
+    plt.style.use(config.style)
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    
+    # Extract data
+    data = features.data
+    time = np.arange(len(data))
+    change_points = changepoint_results['change_points']
+    segments = changepoint_results['segments']
+    
+    # Plot data with change points
+    ax1.plot(time, data, 'k-', alpha=0.8, linewidth=1)
+    
+    # Mark change points
+    for cp in change_points:
+        ax1.axvline(x=cp, color='red', linestyle='--', alpha=0.7, 
+                   label='Change point' if cp == change_points[0] else '')
+    
+    # Color segments
+    colors = plt.cm.viridis(np.linspace(0, 1, len(segments)))
+    for i, segment in enumerate(segments):
+        start, end = segment['start'], segment['end']
+        ax1.axvspan(start, end, alpha=0.1, color=colors[i])
+        
+        # Add segment trend line
+        if segment['length'] > 1:
+            x = np.arange(start, end)
+            y = segment['mean'] + segment['trend'] * (x - start)
+            ax1.plot(x, y, color=colors[i], linewidth=2, alpha=0.8)
+    
+    ax1.set_ylabel('Value')
+    ax1.set_title('Data with Change Points and Segment Trends')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot segment statistics
+    segment_starts = [s['start'] for s in segments]
+    segment_means = [s['mean'] for s in segments]
+    segment_stds = [s['std'] for s in segments]
+    
+    ax2.bar(segment_starts, segment_means, 
+            width=[s['length'] for s in segments],
+            alpha=0.6, edgecolor='black', linewidth=1)
+    
+    # Add error bars for std
+    for i, (start, mean, std) in enumerate(zip(segment_starts, segment_means, segment_stds)):
+        width = segments[i]['length']
+        ax2.errorbar(start + width/2, mean, yerr=std, 
+                    color='black', capsize=5, capthick=2)
+    
+    ax2.set_xlabel('Time')
+    ax2.set_ylabel('Segment Mean ± Std')
+    ax2.set_title('Segment Statistics')
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=config.dpi, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+
+# ===============================
+# Causality Visualization
+# ===============================
+
+def plot_causality_matrix(
+    causality_matrix: np.ndarray,
+    series_names: List[str],
+    lag: int = 1,
+    save_path: Optional[Union[str, Path]] = None,
+    config: Optional[PlottingConfig] = None
+) -> None:
+    """
+    Plot causality matrix as a directed heatmap.
+    
+    Args:
+        causality_matrix: N×N causality matrix
+        series_names: List of series names
+        lag: Time lag used for causality
+        save_path: Path to save figure
+        config: Plotting configuration
+    """
+    _check_plotting()
+    
+    if config is None:
+        config = PlottingConfig()
+    
+    plt.figure(figsize=(10, 8))
+    
+    # Create heatmap with arrows to indicate direction
+    sns.heatmap(
+        causality_matrix,
+        xticklabels=series_names,
+        yticklabels=series_names,
+        annot=True,
+        fmt='.3f',
+        cmap='Reds',
+        square=True,
+        linewidths=0.5,
+        cbar_kws={'label': f'Causality Probability (lag={lag})'}
+    )
+    
+    plt.title(f'Structural Causality Matrix\n(Column causes Row with lag {lag})', 
+              fontsize=16)
+    plt.xlabel('Cause', fontsize=12)
+    plt.ylabel('Effect', fontsize=12)
+    
+    # Rotate labels for readability
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+    
+    # Add diagonal label
+    ax = plt.gca()
+    for i in range(len(series_names)):
+        ax.add_patch(plt.Rectangle((i, i), 1, 1, fill=False, 
+                                  edgecolor='blue', linewidth=2))
+    
+    # Add text annotation
+    plt.text(0.02, 0.98, 'Diagonal: Self-causality\nOff-diagonal: Cross-causality',
+            transform=ax.transAxes, fontsize=10, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=config.dpi, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+
+# ===============================
+# Comprehensive Results
+# ===============================
+
+def plot_comprehensive_results(
+    comprehensive_results: Dict[str, Any],
+    features_dict: Dict[str, Lambda3FeatureSet],
+    save_path: Optional[Union[str, Path]] = None,
+    config: Optional[PlottingConfig] = None
+) -> None:
+    """
+    Create a comprehensive visualization dashboard for all analysis results.
+    
+    Args:
+        comprehensive_results: Results from run_comprehensive_analysis
+        features_dict: Dictionary of features
+        save_path: Path to save figure
+        config: Plotting configuration
+    """
+    _check_plotting()
+    
+    if config is None:
+        config = PlottingConfig()
+    
+    # Create large figure with subplots
+    fig = plt.figure(figsize=(20, 24))
+    gs = fig.add_gridspec(5, 3, hspace=0.3, wspace=0.3)
+    
+    # 1. Time series overview (top row)
+    ax1 = fig.add_subplot(gs[0, :])
+    series_names = comprehensive_results['series_names']
+    colors = sns.color_palette(config.color_palette, len(series_names))
+    
+    for i, name in enumerate(series_names):
+        data = features_dict[name].data
+        data_norm = (data - np.mean(data)) / np.std(data) + i * 3
+        ax1.plot(data_norm, color=colors[i], label=name, alpha=0.8)
+    
+    ax1.set_ylabel('Normalized Value (offset)')
+    ax1.set_title('Time Series Overview', fontsize=16)
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Causality matrix (second row, left)
+    ax2 = fig.add_subplot(gs[1, 0])
+    if 'causality' in comprehensive_results:
+        causality_mat = comprehensive_results['causality']['matrix']
+        sns.heatmap(causality_mat, 
+                    xticklabels=series_names,
+                    yticklabels=series_names,
+                    annot=True, fmt='.2f',
+                    cmap='Reds', square=True,
+                    cbar_kws={'label': 'Causality Strength'},
+                    ax=ax2)
+        ax2.set_title('Causality Matrix (Column → Row)')
+    
+    # 3. Regime visualization (second row, middle and right)
+    if 'regimes' in comprehensive_results:
+        ax3 = fig.add_subplot(gs[1, 1:])
+        
+        # Stack regime labels for all series
+        regime_data = []
+        for name in series_names:
+            if name in comprehensive_results['regimes']:
+                regime_info = comprehensive_results['regimes'][name]
+                regime_data.append(regime_info.labels)
+        
+        if regime_data:
+            regime_array = np.array(regime_data)
+            im = ax3.imshow(regime_array, aspect='auto', cmap='tab10')
+            ax3.set_yticks(range(len(series_names)))
+            ax3.set_yticklabels(series_names)
+            ax3.set_xlabel('Time')
+            ax3.set_title('Market Regimes Across Series')
+            plt.colorbar(im, ax=ax3, label='Regime ID')
+    
+    # 4. Synchronization and interaction summary (third row)
+    if 'cross_analysis' in comprehensive_results:
+        cross = comprehensive_results['cross_analysis']
+        
+        # Sync matrix
+        ax4 = fig.add_subplot(gs[2, 0])
+        sns.heatmap(cross.sync_matrix,
+                    xticklabels=series_names,
+                    yticklabels=series_names,
+                    annot=True, fmt='.2f',
+                    cmap='Blues', square=True,
+                    cbar_kws={'label': 'Sync Rate'},
+                    ax=ax4)
+        ax4.set_title('Synchronization Matrix')
+        
+        # Interaction matrix
+        ax5 = fig.add_subplot(gs[2, 1])
+        mask = np.eye(len(series_names), dtype=bool)
+        sns.heatmap(cross.interaction_matrix,
+                    mask=mask,
+                    xticklabels=series_names,
+                    yticklabels=series_names,
+                    annot=True, fmt='.2f',
+                    cmap='RdBu_r', center=0,
+                    square=True,
+                    cbar_kws={'label': 'Interaction β'},
+                    ax=ax5)
+        ax5.set_title('Interaction Effects')
+        
+        # Network
+        ax6 = fig.add_subplot(gs[2, 2])
+        if cross.network and cross.network.number_of_edges() > 0:
+            import networkx as nx
+            pos = nx.spring_layout(cross.network)
+            nx.draw(cross.network, pos, ax=ax6,
+                   with_labels=True, node_color='lightblue',
+                   node_size=1000, font_size=10,
+                   edge_color='gray', arrows=True)
+            ax6.set_title('Synchronization Network')
+    
+    # 5. Change points summary (fourth row)
+    if 'changepoints' in comprehensive_results:
+        ax7 = fig.add_subplot(gs[3, :])
+        
+        # Create timeline of change points
+        all_changepoints = []
+        for name in series_names:
+            if name in comprehensive_results['changepoints']:
+                cps = comprehensive_results['changepoints'][name]['change_points']
+                for cp in cps:
+                    all_changepoints.append((cp, name))
+        
+        if all_changepoints:
+            all_changepoints.sort(key=lambda x: x[0])
+            
+            # Plot timeline
+            for i, (cp, name) in enumerate(all_changepoints):
+                color = colors[series_names.index(name)]
+                ax7.scatter(cp, i, s=100, color=color, marker='o')
+                ax7.text(cp + 5, i, f'{name}', fontsize=8)
+            
+            ax7.set_xlabel('Time')
+            ax7.set_ylabel('Change Point Event')
+            ax7.set_title('Change Points Timeline')
+            ax7.grid(True, alpha=0.3)
+    
+    # 6. Summary statistics (bottom row)
+    ax8 = fig.add_subplot(gs[4, :])
+    ax8.axis('off')
+    
+    # Create summary text
+    summary = comprehensive_results.get('summary', {})
+    summary_text = f"""
+    Comprehensive Analysis Summary
+    ==============================
+    Analysis Date: {comprehensive_results.get('timestamp', 'N/A')}
+    Series Analyzed: {summary.get('n_series', 'N/A')}
+    
+    Key Metrics:
+    - Maximum Synchronization: {summary.get('max_sync_rate', 0):.3f}
+    - Significant Interactions: {summary.get('n_significant_interactions', 0)}
+    - Maximum Causality: {summary.get('max_causality', 0):.3f}
+    - Causality Density: {summary.get('causality_density', 0):.1%}
+    """
+    
+    if 'best_bayesian_model' in summary:
+        summary_text += f"\n    - Best Bayesian Model: {summary['best_bayesian_model']}"
+    
+    if 'regime_counts' in summary:
+        summary_text += "\n\n    Regime Counts:"
+        for name, count in summary['regime_counts'].items():
+            summary_text += f"\n    - {name}: {count} regimes"
+    
+    if 'changepoint_counts' in summary:
+        summary_text += "\n\n    Change Point Counts:"
+        for name, count in summary['changepoint_counts'].items():
+            summary_text += f"\n    - {name}: {count} change points"
+    
+    ax8.text(0.05, 0.95, summary_text, transform=ax8.transAxes,
+            fontsize=12, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    # Overall title
+    fig.suptitle('Lambda³ Comprehensive Analysis Dashboard', fontsize=20, y=0.995)
+    
+    # Save or show
+    if save_path:
+        plt.savefig(save_path, dpi=config.dpi, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+
+# ===============================
 # Summary Dashboard
 # ===============================
 
@@ -816,8 +1175,23 @@ def create_analysis_dashboard(
             'Neg Jumps': features.n_neg_jumps,
             'Mean Tension': features.mean_tension
         })
-    event_df = pd.DataFrame(event_data)
-    event_df.set_index('Series').plot(kind='bar', ax=ax5)
+    
+    # Import pandas for DataFrame operations
+    try:
+        import pandas as pd
+        event_df = pd.DataFrame(event_data)
+        event_df.set_index('Series').plot(kind='bar', ax=ax5)
+    except ImportError:
+        # Fallback if pandas not available
+        x = np.arange(len(event_data))
+        width = 0.25
+        ax5.bar(x - width, [d['Pos Jumps'] for d in event_data], width, label='Pos Jumps')
+        ax5.bar(x, [d['Neg Jumps'] for d in event_data], width, label='Neg Jumps')
+        ax5.bar(x + width, [d['Mean Tension'] for d in event_data], width, label='Mean Tension')
+        ax5.set_xticks(x)
+        ax5.set_xticklabels([d['Series'] for d in event_data])
+        ax5.legend()
+    
     ax5.set_title('Event Statistics')
     ax5.set_ylabel('Count / Value')
     plt.setp(ax5.xaxis.get_majorticklabels(), rotation=45, ha='right')
@@ -864,7 +1238,7 @@ def create_analysis_dashboard(
     
     Network:
     - Edges: {results.network.number_of_edges() if results.network else 0}
-    - Density: {results.network.number_of_edges() / (len(series_names)*(len(series_names)-1)) if results.network else 0:.2%}
+    - Density: {results.network_density:.2%}
     """
     
     ax7.text(0.1, 0.9, summary_text, transform=ax7.transAxes,
@@ -893,8 +1267,99 @@ def create_analysis_dashboard(
         plt.show()
 
 
-# Import pandas for some functions
-try:
-    import pandas as pd
-except ImportError:
-    pd = None
+# ===============================
+# Posterior Predictive Check Plots
+# ===============================
+
+def plot_posterior_predictive_check(
+    ppc_results: Dict[str, Any],
+    observed_data: np.ndarray,
+    model_name: str = "Model",
+    save_path: Optional[Union[str, Path]] = None,
+    config: Optional[PlottingConfig] = None
+) -> None:
+    """
+    Plot posterior predictive check results.
+    
+    Args:
+        ppc_results: PPC results from posterior_predictive_check
+        observed_data: Original observed data
+        model_name: Name of the model
+        save_path: Path to save figure
+        config: Plotting configuration
+    """
+    _check_plotting()
+    
+    if config is None:
+        config = PlottingConfig()
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # 1. Data vs PPC samples
+    ax = axes[0, 0]
+    ppc_samples = ppc_results['ppc_samples']
+    
+    # Plot a subset of PPC samples
+    n_plot = min(100, len(ppc_samples))
+    for i in range(n_plot):
+        ax.plot(ppc_samples[i], color='skyblue', alpha=0.1)
+    
+    # Plot observed data
+    ax.plot(observed_data, color='black', linewidth=2, label='Observed')
+    
+    # Plot mean and CI of PPC
+    ppc_mean = np.mean(ppc_samples, axis=0)
+    ppc_lower = np.percentile(ppc_samples, 2.5, axis=0)
+    ppc_upper = np.percentile(ppc_samples, 97.5, axis=0)
+    
+    ax.plot(ppc_mean, color='red', linewidth=2, label='PPC Mean')
+    ax.fill_between(range(len(ppc_mean)), ppc_lower, ppc_upper, 
+                    color='red', alpha=0.2, label='95% CI')
+    
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Value')
+    ax.set_title('Data vs Posterior Predictive Samples')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # 2. Test statistics
+    test_stats = ppc_results['test_statistics']
+    observed_stats = ppc_results['observed_stats']
+    
+    stat_names = ['mean', 'std', 'min', 'max']
+    for i, stat_name in enumerate(stat_names):
+        ax = axes.flat[i+1] if i < 3 else axes[1, 1]
+        
+        if stat_name in test_stats:
+            # Plot histogram of test statistic
+            ax.hist(test_stats[stat_name], bins=30, alpha=0.7, 
+                   color='lightblue', edgecolor='black')
+            
+            # Mark observed value
+            obs_val = observed_stats[stat_name]
+            ax.axvline(obs_val, color='red', linewidth=2, 
+                      label=f'Observed: {obs_val:.3f}')
+            
+            # Add p-value
+            p_val = ppc_results['bayesian_p_values'][stat_name]
+            ax.text(0.05, 0.95, f'p-value: {p_val:.3f}',
+                   transform=ax.transAxes, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
+            ax.set_xlabel(stat_name.capitalize())
+            ax.set_ylabel('Frequency')
+            ax.set_title(f'PPC: {stat_name.capitalize()}')
+            ax.legend()
+            ax.grid(True, alpha=0.3, axis='y')
+    
+    # Overall title
+    fig.suptitle(f'Posterior Predictive Check - {model_name}', fontsize=16)
+    
+    plt.tight_layout()
+    
+    # Save or show
+    if save_path:
+        plt.savefig(save_path, dpi=config.dpi, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
