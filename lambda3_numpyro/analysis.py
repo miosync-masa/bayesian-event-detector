@@ -21,11 +21,9 @@ from .types import (
 from .feature import calculate_sync_profile, sync_matrix, build_sync_network
 from .bayes import fit_bayesian_model, check_convergence
 
-
 # ===============================
 # Pairwise Analysis Function
 # ===============================
-
 def analyze_pair(
     name_a: str,
     name_b: str,
@@ -69,6 +67,14 @@ def analyze_pair(
         seed=seed
     )
     
+    # 収束診断を表示
+    if trace_a.diagnostics:
+        n_div = trace_a.diagnostics.get('n_divergences', 0)
+        if n_div > 0:
+            print(f"  ⚠ WARNING: {n_div} divergences detected for {name_a}")
+        else:
+            print(f"  ✓ No divergences for {name_a}")
+    
     print(f"  Fitting Bayesian model for {name_b}...")
     trace_b = fit_bayesian_model(
         features_b,
@@ -77,6 +83,14 @@ def analyze_pair(
         model_type='interaction',
         seed=seed + 1
     )
+    
+    # 収束診断を表示
+    if trace_b.diagnostics:
+        n_div = trace_b.diagnostics.get('n_divergences', 0)
+        if n_div > 0:
+            print(f"  ⚠ WARNING: {n_div} divergences detected for {name_b}")
+        else:
+            print(f"  ✓ No divergences for {name_b}")
     
     # 3. Extract interaction effects
     interaction_effects = _extract_interaction_effects(
@@ -114,6 +128,23 @@ def analyze_pair(
         'seed': seed
     }
     
+    # 7. 最終的な診断サマリーを表示（verbose時のみ）
+    if config.verbose:
+        print(f"  ✓ Sync rate (σₛ): {sync_profile.max_sync_rate:.3f}")
+        print(f"  ✓ Primary effect: {primary_effect}")
+        
+        # 診断サマリー
+        total_div = 0
+        if trace_a.diagnostics:
+            total_div += trace_a.diagnostics.get('n_divergences', 0)
+        if trace_b.diagnostics:
+            total_div += trace_b.diagnostics.get('n_divergences', 0)
+        
+        if total_div > 0:
+            print(f"  ⚠ Total divergences: {total_div}")
+        else:
+            print(f"  ✓ Convergence: Good (0 divergences)")
+    
     return AnalysisResult(
         trace_a=trace_a,
         trace_b=trace_b,
@@ -122,8 +153,7 @@ def analyze_pair(
         causality_profiles=causality_profiles,
         metadata=metadata
     )
-
-
+    
 # ===============================
 # Multi-Series Analysis
 # ===============================
