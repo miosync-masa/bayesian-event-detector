@@ -15,7 +15,6 @@ import jax.random as random
 import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS, Predictive
-import nvidia_ml_py as nvml
 
 # JAXデバイス設定（最初に実行）
 import os
@@ -1876,16 +1875,3 @@ if __name__ == '__main__':
             'rho_T': features['USD/JPY']['rho_T']
         }
         result = lambda3_advanced_analysis(usd_jpy_data, usd_jpy_features_dict)
-
-    # 4. GPU使用状況の確認（オプション）
-    if backend == 'gpu':
-        try:
-            nvml.nvmlInit()
-            handle = nvml.nvmlDeviceGetHandleByIndex(0)
-            info = nvml.nvmlDeviceGetMemoryInfo(handle)
-            print(f"\n📊 GPU Memory Usage:")
-            print(f"   Used: {info.used / 1024**3:.2f} GB")
-            print(f"   Free: {info.free / 1024**3:.2f} GB")
-            print(f"   Total: {info.total / 1024**3:.2f} GB")
-        except:
-            pass
