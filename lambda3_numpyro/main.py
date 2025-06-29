@@ -302,9 +302,15 @@ For more information, visit: https://github.com/lambda3/lambda3-numpyro
     compare_parser.add_argument(
         '--models',
         nargs='+',
-        choices=['base', 'dynamic', 'interaction'],
+        choices=['base', 'dynamic', 'interaction', 'svi'], 
         default=['base', 'dynamic'],
         help='Models to compare'
+    )
+    compare_parser.add_argument(
+        '--criterion',
+        choices=['loo', 'waic'],
+        default='loo',
+        help='Model comparison criterion'
     )
     compare_parser.add_argument(
         '--output', '-o',
@@ -913,7 +919,6 @@ def cmd_hierarchical(args, config: L3Config):
     
     return 0
 
-
 def cmd_compare(args, config: L3Config):
     """Execute model comparison command."""
     input_path = Path(args.input)
@@ -931,7 +936,10 @@ def cmd_compare(args, config: L3Config):
         features = features[first_name]
     
     # Fit requested models
-    from lambda3_numpyro.bayes import fit_bayesian_model, fit_dynamic_model, compare_models
+    from lambda3_numpyro.bayes import (
+        fit_bayesian_model, fit_dynamic_model, fit_svi_model, 
+        compare_models, Lambda3BayesianInference
+    )
     
     models_dict = {}
     
@@ -950,12 +958,43 @@ def cmd_compare(args, config: L3Config):
                 interaction_features=features,
                 model_type='interaction'
             )
+        elif model_type == 'svi':  # 🆕 SVIサポート追加
+            results = fit_svi_model(features, config, n_steps=10000)
+            print(f"SVI completed. Final loss: {results['losses'][-1]:.4f}")
         
         models_dict[model_type] = results
     
-    # Compare models
-    print("\nComparing models...")
-    comparison = compare_models(models_dict, features, criterion='loo')
+    # Compare models (SVIを除くMCMCモデルのみ)
+    mcmc_models = {k: v for k, v in models_dict.items() 
+                   if k != 'svi' and hasattr(v, 'trace')}
+    
+    if mcmc_models:
+        print("\nComparing models...")
+        comparison = compare_models(mcmc_models, features, 
+                                  criterion=getattr(args, 'criterion', 'loo'))
+        
+        # 🆕 モデル重みを計算（Lambda3BayesianInferenceを一時的に使用）
+        inference = Lambda3BayesianInference(config)
+        inference.results = mcmc_models
+        inference.comparison_results = comparison
+        
+        weights = inference.get_model_weights(features)
+        print("\nModel weights:")
+        for model, weight in weights.items():
+            print(f"  {model}: {weight:.3f}")
+    else:
+        comparison = None
+        weights = None
+    
+    # SVIの情報を追加
+    if 'svi' in models_dict:
+        svi_info = {
+            'final_loss': models_dict['svi']['losses'][-1],
+            'n_steps': len(models_dict['svi']['losses'])
+        }
+        print(f"\nSVI: Final ELBO = {svi_info['final_loss']:.4f}")
+    else:
+        svi_info = None
     
     # Save results
     results_file = output_dir / "comparison_results.pkl"
@@ -963,12 +1002,13 @@ def cmd_compare(args, config: L3Config):
     with open(results_file, 'wb') as f:
         pickle.dump({
             'models': models_dict,
-            'comparison': comparison
+            'comparison': comparison,
+            'weights': weights,  # 🆕 追加
+            'svi_info': svi_info  # 🆕 追加
         }, f)
     print(f"\nResults saved to {results_file}")
     
     return 0
-
 
 def cmd_ppc(args, config: L3Config):
     """Execute posterior predictive check command."""
@@ -1983,6 +2023,7 @@ def test_model_comparison(config: L3Config, verbose: bool) -> Dict:
         # Fit different models
         inference.fit_model(features, 'base')
         inference.fit_model(features, 'dynamic')
+        inference.fit_model(features, 'svi')  
         
         # Compare models
         comparison = inference.compare_models(features, criterion='loo')
