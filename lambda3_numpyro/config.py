@@ -22,16 +22,15 @@ WINDOW_SIZE = 10                     # Window size for tension scalar calculatio
 LOCAL_WINDOW_SIZE = 10               # Window for local standard deviation
 LAG_WINDOW_DEFAULT = 10              # Default lag window for synchronization
 SYNC_THRESHOLD_DEFAULT = 0.3         # Default threshold for sync network edges
-NOISE_STD_DEFAULT = 0.5              # Default noise standard deviation
-NOISE_STD_HIGH = 1.5                 # High noise standard deviation
 
-# Lambda³ theory symbols mapping
+# Lambda³ theory symbols mapping (QΛを追加)
 LAMBDA3_SYMBOLS = {
     'sigma_s': 'sync_rate',          # σₛ: synchronization rate
     'Lambda': 'structural_tensor',    # Λ: structural tensor
     'Delta_LambdaC': 'jump_events',  # ΔΛC: structural jumps
     'rho_T': 'tension_scalar',       # ρT: tension scalar
-    'Lambda_F': 'progression_vector'  # ΛF: progression vector
+    'Lambda_F': 'progression_vector', # ΛF: progression vector
+    'Q_Lambda': 'structural_fitness'  # QΛ: structural fitness/coherence
 }
 
 
