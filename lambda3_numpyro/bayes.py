@@ -1338,10 +1338,10 @@ class Lambda3BayesianInference:
         return results
     
     def compare_models(self, features: Lambda3FeatureSet, 
-                      criterion: str = 'loo',
-                      include_svi: bool = False) -> Dict[str, Any]:
+                       criterion: str = 'loo',
+                       include_svi: bool = False) -> Dict[str, Any]:
         """
-        Compare all fitted models using LOO-CV or WAIC.
+        Compare all fitted models using LOO-CV or WAIC with proper error handling.
         
         Args:
             features: Lambda³ features
@@ -1363,10 +1363,91 @@ class Lambda3BayesianInference:
         if not models_to_compare:
             raise ValueError("No MCMC models available for comparison")
         
-        # Run comparison with LOO/WAIC
-        self.comparison_results = compare_models(
-            models_to_compare, features, criterion
-        )
+        # Prepare models_dict with proper error handling
+        comparison_models = {}
+        for model_name, result in models_to_compare.items():
+            try:
+                print(f"Processing {model_name}...")
+                
+                # Calculate log likelihood with model type
+                log_likelihood = calculate_log_likelihood(
+                    result, features, model_name
+                )
+                
+                # Create or update InferenceData
+                if hasattr(result.trace, 'posterior'):
+                    # Already InferenceData
+                    inference_data = result.trace
+                    # Add log likelihood if not present
+                    if not hasattr(inference_data, 'log_likelihood'):
+                        inference_data = az.from_dict(
+                            posterior=dict(inference_data.posterior),
+                            log_likelihood={'y': log_likelihood},
+                            sample_stats=dict(inference_data.sample_stats) if hasattr(inference_data, 'sample_stats') else None
+                        )
+                else:
+                    # Convert to InferenceData
+                    inference_data = az.from_dict(
+                        posterior=result.trace,
+                        log_likelihood={'y': log_likelihood},
+                        observed_data={'y': features.data}
+                    )
+                
+                comparison_models[model_name] = inference_data
+                
+            except Exception as e:
+                print(f"Warning: Could not process {model_name} for comparison: {e}")
+                continue
+        
+        if not comparison_models:
+            raise ValueError("No models could be processed for comparison")
+        
+        # Calculate information criteria
+        comparison_results = {}
+        for model_name, idata in comparison_models.items():
+            try:
+                if criterion == 'loo':
+                    ic = az.loo(idata)
+                    comparison_results[f'{model_name}_loo'] = {
+                        'loo_estimate': float(ic.elpd_loo),
+                        'loo_se': float(ic.se),
+                        'p_loo': float(ic.p_loo)
+                    }
+                else:  # waic
+                    ic = az.waic(idata)
+                    comparison_results[f'{model_name}_waic'] = {
+                        'waic': float(ic.waic),
+                        'waic_se': float(ic.waic_se),
+                        'p_waic': float(ic.p_waic)
+                    }
+            except Exception as e:
+                print(f"{criterion.upper()} calculation failed for {model_name}: {e}")
+        
+        # Model comparison table
+        if len(comparison_models) > 1:
+            try:
+                compare_df = az.compare(comparison_models)
+                comparison_results['comparison_table'] = compare_df
+                print(f"\nModel Comparison Results ({criterion.upper()}):")
+                print(compare_df)
+                
+                # Best model
+                best_model = compare_df.index[0]
+                comparison_results['best_model'] = best_model
+                print(f"\nBest model: {best_model}")
+            except Exception as e:
+                print(f"Model comparison failed: {e}")
+                # Fallback: select best based on individual scores
+                if criterion == 'loo':
+                    scores = {m: r['loo_estimate'] for m, r in comparison_results.items() if 'loo_estimate' in r}
+                    if scores:
+                        best_model = max(scores, key=scores.get)
+                        comparison_results['best_model'] = best_model.replace('_loo', '')
+                else:
+                    scores = {m: -r['waic'] for m, r in comparison_results.items() if 'waic' in r}
+                    if scores:
+                        best_model = max(scores, key=scores.get)
+                        comparison_results['best_model'] = best_model.replace('_waic', '')
         
         # Add SVI information if requested
         if include_svi and 'svi' in self.results:
@@ -1377,18 +1458,19 @@ class Lambda3BayesianInference:
             print(f"  Note: SVI uses ELBO, not directly comparable to {criterion.upper()}")
             
             # Store SVI info separately
-            self.comparison_results['svi_info'] = {
+            comparison_results['svi_info'] = {
                 'final_loss': final_loss,
                 'n_steps': len(svi_result['losses'])
             }
         
-        return self.comparison_results
-    
+        self.comparison_results = comparison_results
+        return comparison_results
+                 
     def run_ppc(self, features: Lambda3FeatureSet, 
                 model_name: Optional[str] = None,
                 n_samples: int = 500) -> Dict[str, Any]:
         """
-        Run posterior predictive checks.
+        Run posterior predictive checks with model type inference.
         
         Args:
             features: Lambda³ features
@@ -1416,20 +1498,23 @@ class Lambda3BayesianInference:
         if model_name == 'svi':
             print("Note: PPC for SVI uses point estimates from the guide")
             # Special handling for SVI
-            # Convert SVI results to a format suitable for PPC
-            # This is a simplified version
             return {
                 'model': 'svi',
-                'note': 'SVI PPC uses variational posterior approximation'
+                'note': 'SVI PPC uses variational posterior approximation',
+                'bayesian_p_values': {}  # Add empty p-values to prevent downstream errors
             }
         
+        # Use the fixed posterior_predictive_check function
         ppc_results = posterior_predictive_check(
-            self.results[model_name], features, n_samples=n_samples
+            self.results[model_name], 
+            features, 
+            n_samples=n_samples,
+            model_type=model_name  # Pass model type
         )
         self.ppc_results[model_name] = ppc_results
         
         return ppc_results
-    
+        
     def get_best_model(self) -> Tuple[str, Union[BayesianResults, Dict[str, Any]]]:
         """
         Get the best model based on comparison.
@@ -1445,7 +1530,7 @@ class Lambda3BayesianInference:
     
     def get_model_weights(self, features: Lambda3FeatureSet) -> Dict[str, float]:
         """
-        Calculate model weights for ensemble predictions.
+        Calculate model weights for ensemble predictions with error handling.
         
         Args:
             features: Lambda³ features
@@ -1454,7 +1539,15 @@ class Lambda3BayesianInference:
             Dictionary of model weights based on LOO/WAIC
         """
         if self.comparison_results is None:
-            self.compare_models(features)
+            try:
+                self.compare_models(features)
+            except Exception as e:
+                print(f"Warning: Could not compare models: {e}")
+                # Return equal weights as fallback
+                mcmc_models = [name for name, result in self.results.items()
+                             if isinstance(result, BayesianResults)]
+                n_models = len(mcmc_models)
+                return {name: 1.0/n_models for name in mcmc_models} if n_models > 0 else {}
         
         if 'comparison_table' in self.comparison_results:
             compare_df = self.comparison_results['comparison_table']
@@ -1470,7 +1563,9 @@ class Lambda3BayesianInference:
                     # For WAIC, lower is better, so negate
                     elpd_values = -compare_df['waic'].values
                 else:
-                    raise ValueError("No suitable metric for weight calculation")
+                    # No suitable metric, return equal weights
+                    n_models = len(compare_df)
+                    return {name: 1.0/n_models for name in compare_df.index}
                 
                 # Akaike-style weights
                 diffs = elpd_values - np.max(elpd_values)
@@ -1484,7 +1579,7 @@ class Lambda3BayesianInference:
             mcmc_models = [name for name, result in self.results.items()
                          if isinstance(result, BayesianResults)]
             n_models = len(mcmc_models)
-            return {name: 1.0/n_models for name in mcmc_models}
+            return {name: 1.0/n_models for name in mcmc_models} if n_models > 0 else {}     
     
     def summary(self) -> Dict[str, Any]:
         """
