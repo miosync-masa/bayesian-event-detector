@@ -39,6 +39,7 @@ This repository showcases the evolution of Lambda³ (Λ³)–based event-driven 
     - Colab/Jupyter compatible, OSS-first design  
     - *Use*: Event-driven network diagnosis, structural analysis of complex systems  
     - [Colab Demo](https://colab.research.google.com/drive/1OxRTRsNwqUaEs8esj-plPO7ZJnXC-LZ5?usp=sharing)
+- **For dozens to ~100 pairs of time series (with typical lengths <5,000 points each), this Colab with NumPyro JIT + CPU is extremely fast and practica.**
 
 ### 5️⃣ `lambda3_numpyro` (Modular & Bayesian NumPyro version, NEW!)
 - **Full modularization & extensible package structure for Lambda³ theory**
