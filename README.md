@@ -68,21 +68,27 @@ markets, climate, biology—all full of jumps, switches, surprises.
 Welcome to the new standard.
 
 ---
-
 ## 📦 File Structure
 
-| File                           | Description                                                        |
-|--------------------------------|--------------------------------------------------------------------|
-| event_jump_detector.py         | Minimal baseline “history-jump” Bayesian detector                  |
-| lambda3_jump_event_detector.py | Lambda³ advanced model (directional, asymmetric jumps)             |
-| dual_sync_bayesian.py          | Dual time-series analysis (asymmetric lag/sync detection, experimental) |
-| lambda3_abc.py                 | Advanced: Λ³ Approximate Bayesian Computation module               |
-| requirements.txt               | Quick pip dependencies                                            |
-| pyproject.toml                 | For modern Python workflows (poetry, PEP517/518, etc.)            |
-| test_event_jump_detector.py    | Minimal tests for baseline detector                                |
-| test_lambda3_jump_event_detector.py | Tests for Lambda³ advanced model                         |
-| README.md                      | This file                                                         |
-| LICENSE                        | MIT License                                                       |
+| File / Directory                        | Description                                                                           |
+|-----------------------------------------|---------------------------------------------------------------------------------------|
+| `event_jump_detector.py`                | Minimal baseline “history-jump” Bayesian detector (quickstart example)                |
+| `lambda3_jump_event_detector.py`        | Lambda³ advanced model (directional & asymmetric jumps; semantic structure)           |
+| `Dual_sync_model/`                      | Dual time-series analysis modules: <br> ├─ `dual_sync_bayesian_jit.py` (JIT-accelerated, CPU) <br> └─ `dual_sync_bayesian.py` (reference, non-JIT) |
+| `lambda3_abc.py`                        | Advanced: Λ³ Approximate Bayesian Computation (ABC) module (multi-scale, OSS style)   |
+| `lambda3_numpyro/`                      | Modular Lambda³ NumPyro backend (full Bayesian framework, GPU/Cloud-ready, scalable)  |
+| `requirements.txt`                      | Standard pip dependencies for all modules                                             |
+| `pyproject.toml`                        | Modern Python build (PEP517/518/pyproject) for poetry & advanced workflows            |
+| `test_event_jump_detector.py`           | Minimal test for baseline detector                                                    |
+| `test_lambda3_jump_event_detector.py`   | Tests for Lambda³ advanced model                                                      |
+| `README.md`                             | This file (English & Japanese, see below)                                             |
+| `LICENSE`                               | MIT License                                                                           |
+
+### 📝 Supplement
+
+- `Dual_sync_model/` contains both the **JIT-optimized** and **reference (non-JIT)** dual time-series modules.
+- `lambda3_numpyro/` is a standalone directory for all NumPyro-based (GPU/Cloud) code, including modular analysis, Colab demos, and examples.
+- All modules are designed to be **independent**—use one, or combine for full Lambda³ structural analytics.
 
 ---
 
