@@ -78,6 +78,13 @@ Jump-events capture both the direction (positive/negative) and magnitude of thes
 | **Change-point detection** | Broad regime shifts or statistical changes<br>(mean/variance/trend) | Change-point indices<br>(segment boundaries) | Regime segmentation, volatility regime, drift | Misses small, rapid events; only coarse boundaries | Used for regime annotation |
 | **Outlier detection**    | Rare, extreme values<br>(anomalies, noise, errors) | Outlier indices/flags  | Data cleaning, anomaly detection | Not always meaningful<br>for structure; may mix noise & real jumps | Used for data QC<br>(not structural) |
 
+> **Tip:**  
+> - Jump-events = Local, structural "pulses" that drive system evolution.  
+> - Change-points = Big regime shifts (segments, plateaus).  
+> - Outliers = Rare anomalies, usually noise or data error.  
+>
+> *Lambda³ makes jump-events the main unit of analysis: they are not “noise”—they ARE the change.*
+
 ---
 
 ## Welcome to the new standard.
