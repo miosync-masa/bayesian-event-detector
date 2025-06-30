@@ -1070,7 +1070,6 @@ def posterior_predictive_check(
 # ===============================
 # Variational Inference (SVI)
 # ===============================
-
 def fit_svi_model(
     features: Lambda3FeatureSet,
     config: Union[L3Config, BayesianConfig],
@@ -1111,11 +1110,27 @@ def fit_svi_model(
         'local_jump': jnp.asarray(features.local_jump)
     }
     
-    # Select model
+    # Select model and get prior scales
+    prior_scales = getattr(bayes_config, 'prior_scales', {
+        'innovation_scale': 0.1,
+        'beta_dLC_pos': 5.0,
+        'beta_dLC_neg': 5.0,
+        'beta_rhoT': 3.0,
+        'beta_local_jump': 2.0,
+        'sigma_base': 1.0,
+        'sigma_scale': 0.5
+    })
+    
     if model_type == 'base':
         model = lambda3_base_model
         model_kwargs = {
-            'prior_scales': bayes_config.prior_scales
+            'prior_scales': prior_scales
+        }
+    elif model_type == 'interaction':
+        # 将来的な拡張用
+        model = lambda3_interaction_model
+        model_kwargs = {
+            'prior_scales': prior_scales
         }
     else:
         raise ValueError(f"SVI not implemented for model type: {model_type}")
@@ -1150,28 +1165,82 @@ def fit_svi_model(
         sample_shape=(1000,)
     )
     
-    # Calculate predictions
-    mu = (
-        posterior_samples['beta_0'].mean() +
-        posterior_samples['beta_time'].mean() * features.time_trend +
-        posterior_samples['beta_dLC_pos'].mean() * features.delta_LambdaC_pos +
-        posterior_samples['beta_dLC_neg'].mean() * features.delta_LambdaC_neg +
-        posterior_samples['beta_rhoT'].mean() * features.rho_T
-    )
+    # Debug: 利用可能なパラメータを確認
+    print("\nAvailable parameters in posterior samples:")
+    for key in posterior_samples.keys():
+        if hasattr(posterior_samples[key], 'shape'):
+            print(f"  - {key}: shape {posterior_samples[key].shape}")
+        else:
+            print(f"  - {key}: {type(posterior_samples[key])}")
     
-    if 'beta_local_jump' in posterior_samples:
-        mu += posterior_samples['beta_local_jump'].mean() * features.local_jump
+    # Calculate predictions based on model type
+    if model_type == 'base':
+        # lambda3_base_modelの構造に基づく予測
+        if 'beta_time_series' in posterior_samples:
+            # 時変成分の平均を基準とする
+            mu = posterior_samples['beta_time_series'].mean(axis=0)
+        else:
+            # ベースラインなし（Lambda³理論に従う）
+            mu = np.zeros(len(features.data))
+        
+        # 構造成分を追加
+        if 'beta_dLC_pos' in posterior_samples:
+            mu = mu + posterior_samples['beta_dLC_pos'].mean() * features.delta_LambdaC_pos
+        if 'beta_dLC_neg' in posterior_samples:
+            mu = mu + posterior_samples['beta_dLC_neg'].mean() * features.delta_LambdaC_neg
+        if 'beta_rhoT' in posterior_samples:
+            mu = mu + posterior_samples['beta_rhoT'].mean() * features.rho_T
+        if 'beta_local_jump' in posterior_samples:
+            mu = mu + posterior_samples['beta_local_jump'].mean() * features.local_jump
+            
+    elif model_type == 'interaction':
+        # lambda3_interaction_modelの構造に基づく予測
+        mu = np.zeros(len(features.data))
+        
+        if 'beta_0' in posterior_samples:
+            mu = mu + posterior_samples['beta_0'].mean()
+        if 'beta_time' in posterior_samples:
+            mu = mu + posterior_samples['beta_time'].mean() * features.time_trend
+        if 'beta_dLC_pos' in posterior_samples:
+            mu = mu + posterior_samples['beta_dLC_pos'].mean() * features.delta_LambdaC_pos
+        if 'beta_dLC_neg' in posterior_samples:
+            mu = mu + posterior_samples['beta_dLC_neg'].mean() * features.delta_LambdaC_neg
+        if 'beta_rhoT' in posterior_samples:
+            mu = mu + posterior_samples['beta_rhoT'].mean() * features.rho_T
+        if 'beta_local_jump' in posterior_samples:
+            mu = mu + posterior_samples['beta_local_jump'].mean() * features.local_jump
     
     predictions = np.asarray(mu)
+    
+    # 収束診断
+    converged = False
+    if len(losses) > 100:
+        # 最後の100ステップの標準偏差で収束を判定
+        loss_std = np.std(losses[-100:])
+        converged = loss_std < 0.01 * np.abs(losses[-1])
+    
+    # 最終損失と改善率を計算
+    initial_loss = losses[0] if losses else np.nan
+    final_loss = losses[-1] if losses else np.nan
+    improvement_rate = (initial_loss - final_loss) / initial_loss if initial_loss != 0 else 0
+    
+    print(f"\nSVI optimization completed:")
+    print(f"  Initial loss: {initial_loss:.4f}")
+    print(f"  Final loss: {final_loss:.4f}")
+    print(f"  Improvement: {improvement_rate:.2%}")
+    print(f"  Converged: {converged}")
     
     return {
         'posterior_samples': posterior_samples,
         'predictions': predictions,
         'losses': losses,
         'params': params,
-        'guide': guide
+        'guide': guide,
+        'converged': converged,
+        'final_loss': final_loss,
+        'improvement_rate': improvement_rate,
+        'model_type': model_type
     }
-
 
 # ===============================
 # Complete Bayesian Analysis Pipeline
