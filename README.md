@@ -67,15 +67,16 @@ markets, climate, biology—all full of jumps, switches, surprises.
 
 ---
 
-Welcome to the new standard.
+## Welcome to the new standard.
 
-| Cross-Series Interaction       | Synchronization Matrix         | Network Structure               |
-|-------------------------------|-------------------------------|---------------------------------|
-| ![Interaction](http://www.miosync.link/github/fig12.png) | ![SyncMatrix](http://www.miosync.link/github/fig13.png) | ![Network](http://www.miosync.link/github/fig14.png) |
+| Cross-Series Interaction <br><sub>(Causal impact coefficients β)</sub> | Synchronization Matrix <br><sub>(Pairwise event sync rate σₛ)</sub> | Network Structure <br><sub>(Event-driven directed sync graph)</sub> |
+|:---------------------------------------------------------------------:|:--------------------------------------------------------------------:|:-------------------------------------------------------------------:|
+| ![Interaction](http://www.miosync.link/github/fig12.png)<br><sub>**Interaction effects:** Causal structure between series (columns: source, rows: target)</sub> | ![SyncMatrix](http://www.miosync.link/github/fig13.png)<br><sub>**Synchronization matrix:** Event-based σₛ for all pairs (higher = more synchronous)</sub> | ![Network](http://www.miosync.link/github/fig14.png)<br><sub>**Network graph:** Directed info flow & optimal lag structure (arrows show direction)</sub> |
 
-| Series Fit + Events           | Posterior Parameter Estimates  |
-|------------------------------|-------------------------------|
-| ![FitEvents](http://www.miosync.link/github/fig10.png) | ![Posteriors](http://www.miosync.link/github/USDJPY_225.png) |
+| Series Fit + Events <br><sub>(Model fit & jump detection)</sub> | Posterior Parameter Estimates <br><sub>(Bayesian 94% HDI)</sub> |
+|:--------------------------------------------------------------:|:----------------------------------------------------------------:|
+| ![FitEvents](http://www.miosync.link/github/fig10.png)<br><sub>**Model fit:** Original data, prediction, detected jumps (colored), local events</sub> | ![Posteriors](http://www.miosync.link/github/USDJPY_225.png)<br><sub>**Posterior distributions:** Key coefficients with 94% highest density interval (HDI)</sub> |
+
 
 ---
 ## 📦 File Structure
