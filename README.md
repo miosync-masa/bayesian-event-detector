@@ -65,6 +65,19 @@ markets, climate, biology—all full of jumps, switches, surprises.
 > "Why is my Bayesian fit so blind to regime changes?"  
 > "I wish I could just see what caused that spike..."
 
+### What is a "jump-event"?
+
+A **jump-event** is an abrupt, discrete structural change in a time series — a sudden “jump” rather than a slow drift or regular fluctuation. Unlike classical *change-point detection*, which finds broader regime shifts, or *outlier detection*, which flags rare extreme values, a jump-event specifically marks a moment where the underlying process rapidly changes state (for example: price shock, heart rhythm flip, regime switch).  
+Jump-events capture both the direction (positive/negative) and magnitude of these structural pulses, enabling you to analyze how, when, and why critical transitions occur — not just whether the mean or variance has shifted.
+
+> In Lambda³, jump-events are treated as first-class structural events — the core “particles” of change, not just noise or anomalies.
+
+| Method                   | What it detects                                   | Typical Output          | Example Use Case                | Limitation                          | Lambda³ Usage      |
+|--------------------------|---------------------------------------------------|------------------------|----------------------------------|--------------------------------------|--------------------|
+| **Jump-event detection** | *Abrupt, local, signed* structural changes        | List of jump events<br>(location, sign, magnitude) | Causal impact, shock propagation, structural analysis | May be “hidden” if only looking at means/variance | **Core primitive (“event-pulse”)** |
+| **Change-point detection** | Broad regime shifts or statistical changes<br>(mean/variance/trend) | Change-point indices<br>(segment boundaries) | Regime segmentation, volatility regime, drift | Misses small, rapid events; only coarse boundaries | Used for regime annotation |
+| **Outlier detection**    | Rare, extreme values<br>(anomalies, noise, errors) | Outlier indices/flags  | Data cleaning, anomaly detection | Not always meaningful<br>for structure; may mix noise & real jumps | Used for data QC<br>(not structural) |
+
 ---
 
 ## Welcome to the new standard.
