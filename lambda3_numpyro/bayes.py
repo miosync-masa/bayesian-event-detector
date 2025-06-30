@@ -819,14 +819,13 @@ def compare_models(
     
     return comparison_results
 
-
 def calculate_log_likelihood(
     results: BayesianResults,
     features: Lambda3FeatureSet,
     model_type: str
 ) -> np.ndarray:
     """
-    Calculate log likelihood for model comparison.
+    Calculate log likelihood for model comparison with proper parameter handling.
     
     Args:
         results: Bayesian results
@@ -852,24 +851,14 @@ def calculate_log_likelihood(
     # Calculate for each sample
     for chain in range(n_chains):
         for draw in range(n_draws):
-            # Use unified parameter names
-            mu = (
-                posterior['beta_0'][chain, draw].item() +
-                posterior['beta_time'][chain, draw].item() * features.time_trend +
-                posterior['beta_dLC_pos'][chain, draw].item() * features.delta_LambdaC_pos +
-                posterior['beta_dLC_neg'][chain, draw].item() * features.delta_LambdaC_neg +
-                posterior['beta_rhoT'][chain, draw].item() * features.rho_T
-            )
-            
-            # Add local jump if present
-            if 'beta_local_jump' in posterior:
-                mu += posterior['beta_local_jump'][chain, draw].item() * features.local_jump
+            mu = np.zeros(n_obs)
             
             # Handle dynamic model
             if model_type == 'dynamic' and 'beta_time_series' in posterior:
-                # For dynamic model, use time-varying component
-                mu = posterior['beta_time_series'][chain, draw].values
-                # Add other components
+                # For dynamic model, use time-varying component as base
+                mu = posterior['beta_time_series'][chain, draw].values.copy()
+                
+                # Add other components if present
                 if 'beta_dLC_pos' in posterior:
                     mu = mu + posterior['beta_dLC_pos'][chain, draw].item() * features.delta_LambdaC_pos
                 if 'beta_dLC_neg' in posterior:
@@ -878,32 +867,79 @@ def calculate_log_likelihood(
                     mu = mu + posterior['beta_rhoT'][chain, draw].item() * features.rho_T
                 if 'beta_local_jump' in posterior:
                     mu = mu + posterior['beta_local_jump'][chain, draw].item() * features.local_jump
+                    
+                # Add jump effects
+                time_idx = np.arange(n_obs)
+                for var_name in posterior.data_vars:
+                    if var_name.startswith('jump_'):
+                        jump_value = posterior[var_name][chain, draw].item()
+                        cp_idx = int(var_name.split('_')[1])
+                        mu += jump_value * (time_idx >= cp_idx)
+                        
+            else:
+                # Base or interaction model - build mu from parameters
+                # Add intercept if present
+                if 'beta_0' in posterior:
+                    mu += posterior['beta_0'][chain, draw].item()
+                
+                # Add time trend if present
+                if 'beta_time' in posterior:
+                    mu += posterior['beta_time'][chain, draw].item() * features.time_trend
+                
+                # Add Lambda3 features
+                if 'beta_dLC_pos' in posterior:
+                    mu += posterior['beta_dLC_pos'][chain, draw].item() * features.delta_LambdaC_pos
+                if 'beta_dLC_neg' in posterior:
+                    mu += posterior['beta_dLC_neg'][chain, draw].item() * features.delta_LambdaC_neg
+                if 'beta_rhoT' in posterior:
+                    mu += posterior['beta_rhoT'][chain, draw].item() * features.rho_T
+                
+                # Add local jump if present
+                if 'beta_local_jump' in posterior:
+                    mu += posterior['beta_local_jump'][chain, draw].item() * features.local_jump
+                
+                # Note: Interaction terms would need to be added here if model_type == 'interaction'
+                # But we don't have access to interaction_features in this function
+                # This is a limitation that should be addressed in a full implementation
             
             # Get observation variance
-            sigma = posterior['sigma_obs'][chain, draw].item()
+            if 'sigma_obs' in posterior:
+                sigma = posterior['sigma_obs'][chain, draw].item()
+            elif 'sigma_base' in posterior:
+                # For dynamic model with time-varying sigma
+                sigma_base = posterior['sigma_base'][chain, draw].item()
+                sigma_scale = posterior.get('sigma_scale', 0)
+                if hasattr(sigma_scale, 'isel'):
+                    sigma_scale = sigma_scale[chain, draw].item()
+                sigma = sigma_base + sigma_scale * features.rho_T
+                # Use mean sigma for simplicity
+                sigma = np.mean(sigma)
+            else:
+                # Default sigma
+                sigma = 1.0
             
             # Calculate log likelihood
             log_lik[chain, draw] = norm.logpdf(features.data, mu, sigma)
     
     return log_lik
-
-
+    
 # ===============================
 # Posterior Predictive Checks
 # ===============================
-
 def posterior_predictive_check(
     results: BayesianResults,
     features: Lambda3FeatureSet,
-    n_samples: int = 500
+    n_samples: int = 500,
+    model_type: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Perform posterior predictive checks.
+    Perform posterior predictive checks with proper parameter handling.
     
     Args:
         results: Bayesian results
         features: Lambda³ features
         n_samples: Number of posterior samples to use
+        model_type: Type of model ('base', 'interaction', 'dynamic')
         
     Returns:
         PPC results dictionary
@@ -926,15 +962,75 @@ def posterior_predictive_check(
     n_obs = len(features.data)
     ppc_samples = np.zeros((len(sample_indices), n_obs))
     
+    # Try to infer model type if not provided
+    if model_type is None:
+        if 'beta_time_series' in posterior:
+            model_type = 'dynamic'
+        elif 'beta_interact_pos' in posterior or 'beta_interact_neg' in posterior:
+            model_type = 'interaction'
+        else:
+            model_type = 'base'
+    
     for i, idx in enumerate(sample_indices):
         chain = idx // n_draws
         draw = idx % n_draws
         
-        # Reconstruct mu using actual predictions
-        mu = results.predictions
+        # Reconstruct mu based on model type
+        if model_type == 'dynamic' and 'beta_time_series' in posterior:
+            # Dynamic model
+            mu = posterior['beta_time_series'][chain, draw].values.copy()
+            
+            # Add other components
+            if 'beta_dLC_pos' in posterior:
+                mu += posterior['beta_dLC_pos'][chain, draw].item() * features.delta_LambdaC_pos
+            if 'beta_dLC_neg' in posterior:
+                mu += posterior['beta_dLC_neg'][chain, draw].item() * features.delta_LambdaC_neg
+            if 'beta_rhoT' in posterior:
+                mu += posterior['beta_rhoT'][chain, draw].item() * features.rho_T
+            if 'beta_local_jump' in posterior:
+                mu += posterior['beta_local_jump'][chain, draw].item() * features.local_jump
+                
+            # Add jumps
+            time_idx = np.arange(n_obs)
+            for var_name in posterior.data_vars:
+                if var_name.startswith('jump_'):
+                    jump_value = posterior[var_name][chain, draw].item()
+                    cp_idx = int(var_name.split('_')[1])
+                    mu += jump_value * (time_idx >= cp_idx)
+        else:
+            # Base or interaction model
+            mu = np.zeros(n_obs)
+            
+            # Add components that exist
+            if 'beta_0' in posterior:
+                mu += posterior['beta_0'][chain, draw].item()
+            if 'beta_time' in posterior:
+                mu += posterior['beta_time'][chain, draw].item() * features.time_trend
+            if 'beta_dLC_pos' in posterior:
+                mu += posterior['beta_dLC_pos'][chain, draw].item() * features.delta_LambdaC_pos
+            if 'beta_dLC_neg' in posterior:
+                mu += posterior['beta_dLC_neg'][chain, draw].item() * features.delta_LambdaC_neg
+            if 'beta_rhoT' in posterior:
+                mu += posterior['beta_rhoT'][chain, draw].item() * features.rho_T
+            if 'beta_local_jump' in posterior:
+                mu += posterior['beta_local_jump'][chain, draw].item() * features.local_jump
         
-        # Add noise
-        sigma = posterior['sigma_obs'][chain, draw].item()
+        # Get sigma
+        if 'sigma_obs' in posterior:
+            sigma = posterior['sigma_obs'][chain, draw].item()
+        elif 'sigma_base' in posterior:
+            # Dynamic model with varying sigma
+            sigma_base = posterior['sigma_base'][chain, draw].item()
+            sigma_scale = 0
+            if 'sigma_scale' in posterior:
+                sigma_scale = posterior['sigma_scale'][chain, draw].item()
+            # Use mean sigma for PPC
+            sigma_values = sigma_base + sigma_scale * features.rho_T
+            sigma = np.mean(sigma_values)
+        else:
+            sigma = 1.0
+        
+        # Generate samples
         ppc_samples[i] = np.random.normal(mu, sigma)
     
     # Calculate test statistics
@@ -967,9 +1063,9 @@ def posterior_predictive_check(
         'ppc_samples': ppc_samples,
         'test_statistics': test_statistics,
         'observed_stats': observed_stats,
-        'bayesian_p_values': bayesian_p_values
+        'bayesian_p_values': bayesian_p_values,
+        'model_type': model_type
     }
-
 
 # ===============================
 # Variational Inference (SVI)
@@ -1446,7 +1542,6 @@ class Lambda3BayesianInference:
         
         return summary
 
-
 def predict_with_model(
     trace: az.InferenceData,
     features: Lambda3FeatureSet,
@@ -1454,7 +1549,7 @@ def predict_with_model(
     model_type: str = 'interaction'
 ) -> np.ndarray:
     """
-    Generate predictions from fitted model.
+    Generate predictions from fitted model with proper parameter handling.
     
     Args:
         trace: ArviZ InferenceData from MCMC
@@ -1469,14 +1564,24 @@ def predict_with_model(
     posterior = trace.posterior
     
     if model_type == 'base' or model_type == 'interaction':
-        # Linear model predictions
-        mu = (
-            posterior['beta_0'].mean().item() +
-            posterior['beta_time'].mean().item() * features.time_trend +
-            posterior['beta_dLC_pos'].mean().item() * features.delta_LambdaC_pos +
-            posterior['beta_dLC_neg'].mean().item() * features.delta_LambdaC_neg +
-            posterior['beta_rhoT'].mean().item() * features.rho_T
-        )
+        # Linear model predictions - check which parameters exist
+        mu = np.zeros(len(features.data))
+        
+        # Add intercept if present
+        if 'beta_0' in posterior:
+            mu += posterior['beta_0'].mean().item()
+        
+        # Add time trend if present
+        if 'beta_time' in posterior:
+            mu += posterior['beta_time'].mean().item() * features.time_trend
+            
+        # Add Lambda3 features
+        if 'beta_dLC_pos' in posterior:
+            mu += posterior['beta_dLC_pos'].mean().item() * features.delta_LambdaC_pos
+        if 'beta_dLC_neg' in posterior:
+            mu += posterior['beta_dLC_neg'].mean().item() * features.delta_LambdaC_neg
+        if 'beta_rhoT' in posterior:
+            mu += posterior['beta_rhoT'].mean().item() * features.rho_T
         
         # Add local jump effect if present
         if 'beta_local_jump' in posterior:
@@ -1493,17 +1598,21 @@ def predict_with_model(
     
     elif model_type == 'dynamic':
         # Time-varying predictions
-        beta_time_series = posterior['beta_time_series'].mean(dim=['chain', 'draw']).values
-        mu = (
-            beta_time_series +
-            posterior['beta_dLC_pos'].mean().item() * features.delta_LambdaC_pos +
-            posterior['beta_dLC_neg'].mean().item() * features.delta_LambdaC_neg +
-            posterior['beta_rhoT'].mean().item() * features.rho_T
-        )
-        
-        # Add local jump effect if present
+        if 'beta_time_series' in posterior:
+            # Dynamic model uses time-varying baseline
+            mu = posterior['beta_time_series'].mean(dim=['chain', 'draw']).values
+        else:
+            mu = np.zeros(len(features.data))
+            
+        # Add other components if present
+        if 'beta_dLC_pos' in posterior:
+            mu = mu + posterior['beta_dLC_pos'].mean().item() * features.delta_LambdaC_pos
+        if 'beta_dLC_neg' in posterior:
+            mu = mu + posterior['beta_dLC_neg'].mean().item() * features.delta_LambdaC_neg
+        if 'beta_rhoT' in posterior:
+            mu = mu + posterior['beta_rhoT'].mean().item() * features.rho_T
         if 'beta_local_jump' in posterior:
-            mu += posterior['beta_local_jump'].mean().item() * features.local_jump
+            mu = mu + posterior['beta_local_jump'].mean().item() * features.local_jump
         
         # Add jumps if present
         time_idx = np.arange(len(features.data))
