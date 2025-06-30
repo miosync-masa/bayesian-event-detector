@@ -40,8 +40,6 @@ WINDOW_SIZE = 10  # Window size for tension scalar calculation
 LOCAL_WINDOW_SIZE = 10  # Window for local standard deviation
 LAG_WINDOW_DEFAULT = 10  # Default lag window for synchronization
 SYNC_THRESHOLD_DEFAULT = 0.3  # Default threshold for sync network edges
-NOISE_STD_DEFAULT = 0.5  # Default noise standard deviation
-NOISE_STD_HIGH = 1.5  # High noise standard deviation
 
 # ===============================
 # Lambda³ Config Class
