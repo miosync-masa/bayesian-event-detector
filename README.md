@@ -75,7 +75,7 @@ Welcome to the new standard.
 
 | Series Fit + Events           | Posterior Parameter Estimates  |
 |------------------------------|-------------------------------|
-| ![FitEvents](http://www.miosync.link/github/USDJPY_225.png) | ![Posteriors](http://www.miosync.link/github/fig10.png) |
+| ![FitEvents](http://www.miosync.link/github/fig10.png) | ![Posteriors](http://www.miosync.link/github/USDJPY_225.png) |
 
 ---
 ## 📦 File Structure
