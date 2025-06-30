@@ -65,7 +65,17 @@ markets, climate, biology—all full of jumps, switches, surprises.
 > "Why is my Bayesian fit so blind to regime changes?"  
 > "I wish I could just see what caused that spike..."
 
+---
+
 Welcome to the new standard.
+
+| Cross-Series Interaction       | Synchronization Matrix         | Network Structure               |
+|-------------------------------|-------------------------------|---------------------------------|
+| ![Interaction](http://www.miosync.link/github/fig12.png) | ![SyncMatrix](http://www.miosync.link/github/fig13.png) | ![Network](http://www.miosync.link/github/fig14.png) |
+
+| Series Fit + Events           | Posterior Parameter Estimates  |
+|------------------------------|-------------------------------|
+| ![FitEvents](http://www.miosync.link/github/USDJPY_225.png) | ![Posteriors](http://www.miosync.link/github/fig10.png) |
 
 ---
 ## 📦 File Structure
