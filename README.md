@@ -239,7 +239,134 @@ What you define as a "jump", "synchronization rate", or "topological conservatio
 **Contributors / Digital Partners:** Tamaki, Mio, Tomoe, Shion, Yuu, Rin, Kurisu  
 All rights reserved.
 
+
+# 🦋 Lambda³ Butterfly Effect Analysis on GCP Cloud Run
+
+## Why Cloud Run is the Ultimate Choice
+
+### The Essence of the Butterfly Effect
+*"A butterfly flapping its wings in Brazil can cause a tornado in Texas..."*  
+→ In Lambda³ theory, even the tiniest structural change (ΔΛC) can propagate into global-scale phenomena.
+
+### Lambda³ × Cloud Run: A Perfect Match
+- **Auto-scaling:** From one "butterfly flap" (single API call) to a thousand tornadoes (1000+ concurrent requests)
+- **True serverless:** Pay only for what you use (analyzing one butterfly event may cost less than $0.001)
+- **Global reach:** Monitor "flaps" from around the world, simultaneously
+
+## 🚀 Deploy in 5 Minutes
+
+### 1. Minimal Configuration (single-file example)
+
+```python
+# main.py
+from flask import Flask, request, jsonify
+import numpy as np
+from lambda3_abc import calc_lambda3_features_v2, L3Config
+
+app = Flask(__name__)
+
+@app.route('/butterfly', methods=['POST'])
+def detect_butterfly():
+    """Detect micro-structural changes (the 'flap')"""
+    data = request.json
+
+    # Lambda³ analysis
+    features = calc_lambda3_features_v2(
+        np.array(data['timeseries']),
+        L3Config(delta_percentile=99.9)  # Detect only rarest events
+    )
+
+    # Butterfly effect score calculation
+    butterfly_score = np.sum(features[0]) * features[2].max()  # jumps × max_tension
+
+    return jsonify({
+        'butterfly_score': float(butterfly_score),
+        'will_cause_tornado': butterfly_score > 10.0,
+        'affected_region': predict_impact_zone(features)  # you can define this
+    })
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
+```
 ---
+## Simple Dockerfile
+
+```Dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+CMD exec gunicorn --bind :8080 main:app
+```
+---
+
+## Deploy Command
+```
+export PROJECT_ID=your-butterfly-project
+export REGION=asia-northeast1  # e.g., Tokyo region
+
+gcloud run deploy butterfly-detector \
+  --source . \
+  --region=$REGION \
+  --platform=managed \
+  --memory=1Gi \
+  --cpu=1 \
+  --max-instances=1000 \
+  --allow-unauthenticated
+
+# When complete, you'll get a public endpoint like:
+# https://butterfly-detector-xxx-an.a.run.app
+```
+
+## Multi-region "Butterfly Network" Example
+
+```butterfly-global.yaml
+regions:
+  - asia-northeast1     # Tokyo
+  - us-central1         # Texas
+  - europe-west1        # London
+  - southamerica-east1  # Brazil
+
+deploy_script: |
+  for region in ${regions[@]}; do
+    gcloud run deploy butterfly-detector \
+      --region=$region \
+      --image=gcr.io/$PROJECT_ID/butterfly:latest &
+  done
+```
+## 🔥 Real-World Use Cases
+
+- **Financial Markets:**  
+  Detect the "butterfly trade" that triggers global crashes.
+
+- **Social Networks:**  
+  Analyze when a single tweet becomes a viral phenomenon.
+
+- **Medical (EEG):**  
+  Predict epileptic seizures from subtle brainwave anomalies.
+
+- **Earth Monitoring:**  
+  Real-time global anomaly detection for disaster prevention.
+
+---
+
+## 🚀 Why is this revolutionary?
+
+- **No supercomputers needed:**  
+  Cloud Run's auto-scaling with efficient Lambda³ means you can monitor Earth-scale complexity for the price of a coffee.
+
+- **Real-time, global, event-driven analysis** for any spatio-temporal data.
+
+- **Open science:**  
+  Anyone can deploy and experiment in minutes.
+
+---
+
+> *"Let your butterflies fly! — With Lambda³ and Cloud Run, the tiniest change can now be detected, traced, and even predicted, at global scale, by anyone."*
+
 
 > Science is not property; it's a shared horizon.  
 > Let's redraw the boundaries, together.  
