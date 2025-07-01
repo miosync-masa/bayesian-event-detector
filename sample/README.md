@@ -81,7 +81,7 @@ def analyze_typhoon_3d_structure(lat, lon, radius=500):
 
 ## Why Brute Force Wins in the Era of Cloud Computing
 
-> **「考える前に、殴れば終わる」**  
+> **「Don’t overthink. Just unleash the Lambda³ brute force.」**  
 > The time to code an “elegant” grouping is often longer than just letting 1,000 CPUs analyze all pairs at once!
 
 ---
