@@ -41,6 +41,88 @@ Lambda3Config:
   lag_window: 10
   sync_threshold: 0.3
 ```
+
+###  New Feature Highlight: Adaptive Regime Detection & Real-Time Structural Resume
+
+Lambda³ now supports **dynamic regime detection** and **adaptive “resume” features**, enabling structural tracking of weather states in real time.
+
+---
+
+### 🔥 What's New?
+
+- **Adaptive Regime Detection:**  
+  Detect and track structural weather regimes (like “Late Spring”, “Rainy Season”, etc.) using Bayesian tensor analysis and unsupervised clustering.  
+  No more naive time-based segmentation—every weather state is a semantic “structure” detected from real, discrete jumps (`∆ΛC`) and tension (`ρT`) events.
+
+- **Dynamic Resume Capability:**  
+  When the analysis is interrupted (or a structural shift is detected), Lambda³ can resume **from the current structural regime—not just the time index!**
+
+  - You can **pause** and **continue** modeling at true atmospheric regime boundaries.
+  - Models dynamically adapt to regime transitions—perfect for real-world, non-stationary weather.
+
+- **Regime-Specific Bayesian Inference:**  
+  All Bayesian modeling (causality, synchronization, asymmetric interactions) is now **aware of detected regimes**.  
+  Each regime gets its own parameter set and uncertainty, supporting robust analysis across seasonal or abrupt weather shifts.
+
+- **Integrated Multi-Scale Analysis:**  
+  Detects scale-dependent breaks and structural transitions—so Lambda³ captures both sudden storms and subtle seasonal changes.
+
+- **Automatic Clustering & Labeling:**  
+  Weather regimes are labeled based on structural characteristics (e.g., “Stable-Warming”, “Unstable-Falling”), with full support for custom names (like “Pre-Monsoon”, “Rainy”, etc).
+
+---
+
+### 🛠️ How It Works
+
+- Uses **structural tensor jumps (`∆ΛC`)** and **local tension (`ρT`)** to cluster and segment weather data into regimes.
+- All Bayesian regression and synchronization analysis is *regime-aware*—parameters and uncertainty are tracked per regime.
+- **Resume points** (for modeling or simulation) are defined by detected regime boundaries, not just time steps.
+- Fully compatible with **PyMC** and **scikit-learn** clustering; **JIT/Numba** accelerated.
+
+---
+
+> *No “temporal causality” assumptions. All transitions and resumes are **structural**, based on meaning—not just “time ticks”!*
+>  
+> *Perfect for non-stationary, regime-shifting datasets in weather, finance, or biology.*
+
+---
+
+## Usage Example
+```python
+# Run main analysis with regime detection and dynamic resume
+features, sync_mat, regime_results = main_weather_analysis(
+    csv_path="tokyo_weather_days.csv",
+    value_columns=["temperature_2m", "relative_humidity_2m", ...],
+    use_regime_detection=True,
+    n_regimes=4,  # Customize regime count (e.g., 4 = seasonal + transitional)
+    regime_names=["Late Spring", "Pre-Monsoon", "Rainy", "Early Summer"]
+)
+```
+
+## Resume modeling at regime transitions:
+
+```python
+# Resume Bayesian analysis from last detected regime
+for regime_idx in range(n_regimes):
+    mask = (regime_results['regime_labels'] == regime_idx)
+    analyze_weather_pair_with_regimes(
+        "Temperature", "Humidity", features, L3Config(),
+        n_regimes=n_regimes,
+        show_all_plots=True,
+        analyze_regimes_separately=True
+    )
+```
+### 💡 Why It Matters
+
+- **No “temporal causality” assumptions:**  
+  All transitions and resumes are **structural**, based on meaning—not just “time ticks”!
+
+- **Practical:**  
+  Perfect for analyzing datasets with missing periods, seasonal breaks, or regime-shifting climates (like Tokyo!).
+
+- **Generalizable:**  
+  Works for weather, finance, biology—anywhere a **“regime shift”** is real.
+
 ---
 
 # OpenMeteo API gives access to **80+ atmospheric, soil, radiation, and convective variables**.
