@@ -50,27 +50,17 @@ This repository showcases the evolution of Lambda³ (Λ³)–based event-driven 
     - [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/miosync-masa/bayesian-event-detector/blob/main/lambda3_numpyro/examples/lambda3_colab_setup.ipynb)
     - *Use*: Advanced Bayesian causal inference, scalable multi-network diagnostics, academic & production-grade analytics
       
-### 6️⃣ Lambda³ “Next” (Unified API & Multi-Domain)
+### 5️⃣ `lambda3_numpyro` (Modular & Bayesian NumPyro version, NEW!)
 
-- **Unified Lambda³ API:**  
-  All core features (event detection, regime analysis, network inference, causal modeling) under a single, intuitive Python interface—no more copy-paste or version mismatch.
-
-- **Multi-domain Templates:**  
-  Out-of-the-box recipes for weather, finance, biosignals, and more.  
-  Just swap your CSV—Lambda³ handles the structural intelligence!
-
-- **Interactive Dashboard:**  
-  Integrated Streamlit/Gradio support for real-time regime detection, causal graph visualization, and model diagnostics—no code needed.
-
-- **Cloud & Edge Ready:**  
-  Deployable on Colab, Jupyter, cloud VM, or even edge devices—optimized for both exploratory research and production.
-
-- **[Colab Demo](https://colab.research.google.com/drive/1Crygnt8hQsGlPO0dc2uTtVQVe4tCFERW)**
-
-> *From exploratory notebook to scalable analytics engine—Lambda³ evolves with your data, your questions, and your imagination.*
-
-Stay tuned for documentation, tutorials, and community calls!  
-**Your structural future starts here.**
+- **Full modularization & extensible package structure for Lambda³ theory**
+    - Scalable, testable, and OSS-friendly Python package (`lambda3_numpyro`)
+    - **NumPyro/JAX-based Bayesian inference engine** for causal and synchronization analysis
+    - High-speed feature extraction (Numba/JIT), multi-series & cross-network analytics
+    - **Built-in structural regime detection**:  
+      Cluster and analyze time series by *structural regime* (season, market phase, physiological state, etc.)—not just by time!
+    - Plug-and-play: Easily integrate with any notebook, data pipeline, or Colab demo
+    - [![Colab Demo]](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Crygnt8hQsGlPO0dc2uTtVQVe4tCFERW?usp=sharing)
+    - *Use*: Advanced Bayesian causal inference, regime-aware analytics, scalable multi-network diagnostics, academic & production-grade applications
 
 ---
 # 🚀 Concept
