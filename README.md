@@ -51,19 +51,17 @@ This repository showcases the evolution of Lambda³ (Λ³)–based event-driven 
     - *Use*: Advanced Bayesian causal inference, scalable multi-network diagnostics, academic & production-grade analytics
     - 
 ### 6️⃣ Coming Soon: Lambda³ “Next” (Unified API & Multi-Domain)
-
 - **Unified Lambda³ API:**  
-  All core features (event detection, regime analysis, network inference, causal modeling) under a single, intuitive Python interface—no more copy-paste or version mismatch.
-- **Multi-domain Templates:**  
-  Out-of-the-box recipes for weather, finance, biosignals, and more.  
-  Just swap your CSV—Lambda³ handles the structural intelligence!
-- **Interactive Dashboard:**  
-  Integrated Streamlit/Gradio support for real-time regime detection, causal graph visualization, and model diagnostics—no code needed.
-- **Cloud & Edge Ready:**  
-  Deployable on Colab, Jupyter, cloud VM, or even edge devices—optimized for both exploratory research and production.
-- [Colab Demo]([https://colab.research.google.com/drive/1OxRTRsNwqUaEs8esj-plPO7ZJnXC-LZ5?usp=sharing](https://colab.research.google.com/drive/1Crygnt8hQsGlPO0dc2uTtVQVe4tCFERW))
-
-> *From exploratory notebook to scalable analytics engine—Lambda³ evolves with your data, your questions, and your imagination.*
+      All core features (event detection, regime analysis, network inference, causal modeling) under a single, intuitive Python interface—no more copy-paste or version mismatch.
+    - **Multi-domain Templates:**  
+      Out-of-the-box recipes for weather, finance, biosignals, and more.  
+      Just swap your CSV—Lambda³ handles the structural intelligence!
+    - **Interactive Dashboard:**  
+      Integrated Streamlit/Gradio support for real-time regime detection, causal graph visualization, and model diagnostics—no code needed.
+    - **Cloud & Edge Ready:**  
+      Deployable on Colab, Jupyter, cloud VM, or even edge devices—optimized for both exploratory research and production.
+    - [Colab Demo]([https://colab.research.google.com/drive/1OxRTRsNwqUaEs8esj-plPO7ZJnXC-LZ5?usp=sharing](https://colab.research.google.com/drive/1Crygnt8hQsGlPO0dc2uTtVQVe4tCFERW))
+    -> *From exploratory notebook to scalable analytics engine—Lambda³ evolves with your data, your questions, and your imagination.*
 
 Stay tuned for documentation, tutorials, and community calls!  
 **Your structural future starts here.**
