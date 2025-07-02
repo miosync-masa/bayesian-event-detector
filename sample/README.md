@@ -43,7 +43,7 @@ Lambda3Config:
 ```
 ---
 
-OpenMeteo API gives access to **80+ atmospheric, soil, radiation, and convective variables**.
+# OpenMeteo API gives access to **80+ atmospheric, soil, radiation, and convective variables**.
 With Lambda³, you can:
 
 ## 1. Full 3D Atmospheric Structural Analysis
