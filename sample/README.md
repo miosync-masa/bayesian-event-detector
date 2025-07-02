@@ -3,24 +3,44 @@
  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/miosync-masa/bayesian-event-detector/blob/main/sample/lambda3_weather_analysis.ipynb)
 
 ## 🌤️ Best Practices for Meteorological Lambda³ Analysis
+## 🌏 Lambda³ Parameter Cheat Sheet
 
-### 🕒 Window Size Selection Guide
-
-| Window (hours) | Application                      | Rationale                                      |
-|----------------|----------------------------------|------------------------------------------------|
-| **3–6 h**      | Local phenomena                  | Thunderstorms, tornadoes; matches typical event lifespan |
-| **10–12 h**    | Synoptic scale                   | Fronts, typhoons; captures a single moving event |
-| **24 h**       | Diurnal cycle analysis           | Complete daily cycle; ideal for long-term patterns |
+| Parameter Name          | Recommended Value  | Physical/Analysis Meaning                                                                                 |
+|-------------------------|-------------------|----------------------------------------------------------------------------------------------------------|
+| `window`                | 3–24              | Structure tension (`ρT`) window. <br>3h = local storms, 12h = fronts/typhoons, 24h = diurnal cycle        |
+| `delta_percentile`      | 97–99             | Jump detection threshold. <br>Higher = rare/anomalous jumps only, lower = all structure changes           |
+| `local_window`          | 3–10              | For fine-scale jump/noise anomaly detection                                                               |
+| `draws`                 | 2,000–8,000       | MCMC sample count. <br>Higher = more robust but slower                                                    |
+| `target_accept`         | 0.90–0.99         | Bayesian sampler stability. <br>Default 0.95. Raise if sampler diverges                                   |
+| `LAG_WINDOW_DEFAULT`    | 10                | Max lag for pairwise interaction/synchronization detection                                                |
+| `SYNC_THRESHOLD_DEFAULT`| 0.1–0.5           | Network edge creation threshold (min. sync for connection)                                                |
 
 ---
 
-> ⚠️ **Caution: The 15-hour Window Trap**
->
-> - **Mixes day and night**: Crosses over physically different regimes, contaminating the structural analysis.
-> - **Multiple events**: Captures more than one independent weather event, obscuring true dynamics.
->
-> **Recommended:** Use **10 or 12 hours (half-day)** for best results in most meteorological structural analyses.
+### 💡 Best Practice Tips
 
+- **`window`**: Main control for analysis scale. Match to event duration (e.g., 3h for thunderstorm, 12h for typhoon, 24h for daily cycle)
+- **`delta_percentile`**: 99 = only strongest jumps, 97 = moderate, 90 = even subtle regime changes.
+- **`draws`**: 2,000+ for quick checks, 8,000+ for robust scientific results.
+- **`target_accept`**: If sampling is unstable or you see warnings, try raising to 0.97–0.99.
+- **`LAG_WINDOW_DEFAULT`**: Don’t assume lag 0. Wider lags reveal hidden causal links.
+- **`SYNC_THRESHOLD_DEFAULT`**: Set lower for dense, higher for sparse/meaningful networks.
+
+---
+
+#### Example YAML Config
+
+```yaml
+Lambda3Config:
+  window: 12
+  delta_percentile: 98.0
+  local_window: 6
+  draws: 4000
+  tune: 4000
+  target_accept: 0.95
+  lag_window: 10
+  sync_threshold: 0.3
+```
 ---
 
 OpenMeteo API gives access to **80+ atmospheric, soil, radiation, and convective variables**.
