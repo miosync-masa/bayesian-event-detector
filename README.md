@@ -59,7 +59,7 @@ This repository showcases the evolution of Lambda³ (Λ³)–based event-driven 
     - **Built-in structural regime detection**:  
       Cluster and analyze time series by *structural regime* (season, market phase, physiological state, etc.)—not just by time!
     - Plug-and-play: Easily integrate with any notebook, data pipeline, or Colab demo
-    - [![Colab Demo]](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Crygnt8hQsGlPO0dc2uTtVQVe4tCFERW?usp=sharing)
+    - [Colab Demo](https://colab.research.google.com/drive/1Crygnt8hQsGlPO0dc2uTtVQVe4tCFERW?usp=sharing)
     - *Use*: Advanced Bayesian causal inference, regime-aware analytics, scalable multi-network diagnostics, academic & production-grade applications
 
 ---
