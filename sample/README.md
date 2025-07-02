@@ -1,5 +1,7 @@
 # 🌏 Lambda³ × Open-Meteo — Towards a Unified Earth System Analysis
 
+ [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/miosync-masa/bayesian-event-detector/blob/main/sample/lambda3_weather_analysis.ipynb)
+
 OpenMeteo API gives access to **80+ atmospheric, soil, radiation, and convective variables**.
 With Lambda³, you can:
 
