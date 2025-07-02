@@ -2,6 +2,27 @@
 
  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/miosync-masa/bayesian-event-detector/blob/main/sample/lambda3_weather_analysis.ipynb)
 
+## 🌤️ Best Practices for Meteorological Lambda³ Analysis
+
+### 🕒 Window Size Selection Guide
+
+| Window (hours) | Application                      | Rationale                                      |
+|----------------|----------------------------------|------------------------------------------------|
+| **3–6 h**      | Local phenomena                  | Thunderstorms, tornadoes; matches typical event lifespan |
+| **10–12 h**    | Synoptic scale                   | Fronts, typhoons; captures a single moving event |
+| **24 h**       | Diurnal cycle analysis           | Complete daily cycle; ideal for long-term patterns |
+
+---
+
+> ⚠️ **Caution: The 15-hour Window Trap**
+>
+> - **Mixes day and night**: Crosses over physically different regimes, contaminating the structural analysis.
+> - **Multiple events**: Captures more than one independent weather event, obscuring true dynamics.
+>
+> **Recommended:** Use **10 or 12 hours (half-day)** for best results in most meteorological structural analyses.
+
+---
+
 OpenMeteo API gives access to **80+ atmospheric, soil, radiation, and convective variables**.
 With Lambda³, you can:
 
