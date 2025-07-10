@@ -1,12 +1,43 @@
-numpy==1.26.4
-pandas==2.2.2
-matplotlib==3.8.4
-seaborn==0.13.2
-pymc==5.13.1
-arviz==0.17.0
-pytensor==2.31.3
-scikit-learn==1.5.0
-networkx==3.3
-numba==0.59.1
-# Optional, but recommended for full reproducibility with PyMC
-pytensor==2.31.3
+# Lambda³ Analytics for Bayes & CausalJunction
+# Requirements file for lambda3_abc.py
+
+# Core scientific computing
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# Bayesian modeling and MCMC
+pymc>=5.0.0
+arviz>=0.15.0
+
+# Machine learning and clustering
+scikit-learn>=1.0.0
+
+# Data visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# Graph/network analysis
+networkx>=2.8.0
+
+# High-performance computing
+numba>=0.56.0
+
+# Financial data access
+yfinance>=0.2.0
+
+# Standard library datastructures (already included in Python 3.7+)
+# dataclasses - built-in for Python 3.7+
+# typing - built-in for Python 3.5+
+# pathlib - built-in for Python 3.4+
+
+# Optional: For enhanced performance
+# cython>=0.29.0
+# bottleneck>=1.3.0
+
+# Development and testing (optional)
+# pytest>=6.0.0
+# jupyter>=1.0.0
+# ipython>=7.0.0
+
+# Minimum Python version: 3.7+
