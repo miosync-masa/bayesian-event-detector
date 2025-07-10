@@ -106,15 +106,13 @@ Jump-events capture both the direction (positive/negative) and magnitude of thes
 
 | File / Directory                        | Description                                                                           |
 |-----------------------------------------|---------------------------------------------------------------------------------------|
-| `event_jump_detector.py`                | Minimal baseline “history-jump” Bayesian detector (quickstart example)                |
-| `lambda3_jump_event_detector.py`        | Lambda³ advanced model (directional & asymmetric jumps; semantic structure)           |
-| `Dual_sync_model/`                      | Dual time-series analysis modules: <br> ├─ `dual_sync_bayesian_jit.py` (JIT-accelerated, CPU) <br> └─ `dual_sync_bayesian.py` (reference, non-JIT) |
+| `1st_ver_event_jump_detector`           | Minimal baseline “history-jump” Bayesian detector (quickstart example)                |
+| `2nd?ver_lambda3_jump_event_detector`   | Lambda³ advanced model (directional & asymmetric jumps; semantic structure)           |
+| `3rd_ver_Dual_sync_model/`              | Dual time-series analysis modules: <br> ├─ `dual_sync_bayesian_jit` (JIT-accelerated, CPU) <br> └─ `dual_sync_bayesia` (reference, non-JIT) |
 | `lambda3_abc.py`                        | Advanced: Λ³ Approximate Bayesian Computation (ABC) module (multi-scale, OSS style)   |
 | `lambda3_numpyro/`                      | Modular Lambda³ NumPyro backend (full Bayesian framework, GPU/Cloud-ready, scalable)  |
 | `requirements.txt`                      | Standard pip dependencies for all modules                                             |
 | `pyproject.toml`                        | Modern Python build (PEP517/518/pyproject) for poetry & advanced workflows            |
-| `test_event_jump_detector.py`           | Minimal test for baseline detector                                                    |
-| `test_lambda3_jump_event_detector.py`   | Tests for Lambda³ advanced model                                                      |
 | `README.md`                             | This file (English & Japanese, see below)                                             |
 | `LICENSE`                               | MIT License                                                                           |
 
