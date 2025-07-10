@@ -545,6 +545,156 @@ class Lambda3WeatherRegimeDetector:
         return labels
 
 # ===============================
+# Enhanced Weather Regime Detection with Adaptive Methods
+# ===============================
+class AdaptiveLambda3WeatherRegimeDetector(Lambda3WeatherRegimeDetector):
+    """
+    Enhanced regime detector with better initialization and adaptive clustering.
+    Handles imbalanced seasonal data more effectively.
+    """
+
+    def __init__(self, n_regimes=4, method='kmeans', min_regime_size=20):
+        super().__init__(n_regimes, method)
+        self.min_regime_size = min_regime_size
+
+    def fit(self, features_dict, temporal_hint=None):
+        """
+        Enhanced fit method with temporal hints and better initialization.
+
+        Args:
+            features_dict: Dictionary containing jump and tension features
+            temporal_hint: Optional array indicating temporal progression (e.g., day of year)
+
+        Returns:
+            regime_labels: Array of regime assignments
+        """
+        # Stack features for clustering
+        X = np.column_stack([
+            features_dict['delta_LambdaC_pos'],
+            features_dict['delta_LambdaC_neg'],
+            features_dict['rho_T']
+        ])
+
+        # Normalize features for better clustering
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        if self.method == 'kmeans' and temporal_hint is not None:
+            # Use temporal information for better initialization
+            n_points = len(X)
+            init_centers = []
+
+            # Divide data into temporal segments
+            for i in range(self.n_regimes):
+                start_idx = int(i * n_points / self.n_regimes)
+                end_idx = int((i + 1) * n_points / self.n_regimes)
+                segment_mean = np.mean(X_scaled[start_idx:end_idx], axis=0)
+                init_centers.append(segment_mean)
+
+            init_centers = np.array(init_centers)
+
+            # Use k-means++ with temporal initialization
+            from sklearn.cluster import KMeans
+            km = KMeans(n_clusters=self.n_regimes, init=init_centers, n_init=1, random_state=42)
+            labels = km.fit_predict(X_scaled)
+
+        elif self.method == 'gmm':
+            # Use Gaussian Mixture Model for better handling of overlapping regimes
+            from sklearn.mixture import GaussianMixture
+            gmm = GaussianMixture(n_components=self.n_regimes,
+                                  covariance_type='full',
+                                  n_init=10,
+                                  random_state=42)
+            labels = gmm.fit_predict(X_scaled)
+
+        else:
+            # Default k-means with better initialization
+            from sklearn.cluster import KMeans
+            km = KMeans(n_clusters=self.n_regimes, init='k-means++', n_init=20, random_state=42)
+            labels = km.fit_predict(X_scaled)
+
+        # Post-processing: merge small regimes
+        unique_labels, counts = np.unique(labels, return_counts=True)
+        for label, count in zip(unique_labels, counts):
+            if count < self.min_regime_size:
+                # Find nearest large regime
+                mask = labels == label
+                if np.any(mask):
+                    # Reassign to most common neighboring regime
+                    for i in np.where(mask)[0]:
+                        # Look at neighbors
+                        window = 10
+                        start = max(0, i - window)
+                        end = min(len(labels), i + window + 1)
+                        neighbor_labels = labels[start:end]
+                        neighbor_labels = neighbor_labels[neighbor_labels != label]
+                        if len(neighbor_labels) > 0:
+                            most_common = np.bincount(neighbor_labels).argmax()
+                            labels[i] = most_common
+
+        self.regime_labels = labels
+
+        # Calculate enhanced regime statistics
+        self.regime_features = {}
+        for r in range(self.n_regimes):
+            mask = (labels == r)
+            n_points = np.sum(mask)
+
+            if n_points > 0:
+                self.regime_features[r] = {
+                    'frequency': n_points / len(labels),
+                    'mean_rhoT': np.mean(X[mask, 2]),
+                    'std_rhoT': np.std(X[mask, 2]),
+                    'mean_pos_jumps': np.mean(X[mask, 0]),
+                    'mean_neg_jumps': np.mean(X[mask, 1]),
+                    'temporal_span': self._get_temporal_span(mask) if temporal_hint is not None else None
+                }
+            else:
+                self.regime_features[r] = {
+                    'frequency': 0,
+                    'mean_rhoT': 0,
+                    'std_rhoT': 0,
+                    'mean_pos_jumps': 0,
+                    'mean_neg_jumps': 0,
+                    'temporal_span': None
+                }
+
+        return labels
+
+    def _get_temporal_span(self, mask):
+        """Get the temporal span of a regime."""
+        indices = np.where(mask)[0]
+        if len(indices) > 0:
+            return (indices[0], indices[-1])
+        return None
+
+    def detect_regime_transitions(self, smooth_window=5):
+        """
+        Detect transition points between regimes.
+
+        Args:
+            smooth_window: Window size for smoothing regime assignments
+
+        Returns:
+            transitions: List of (index, from_regime, to_regime) tuples
+        """
+        if self.regime_labels is None:
+            raise ValueError("Must fit the detector first")
+
+        # Smooth labels to reduce noise
+        from scipy.ndimage import median_filter
+        smoothed_labels = median_filter(self.regime_labels, size=smooth_window)
+
+        # Find transitions
+        transitions = []
+        for i in range(1, len(smoothed_labels)):
+            if smoothed_labels[i] != smoothed_labels[i-1]:
+                transitions.append((i, smoothed_labels[i-1], smoothed_labels[i]))
+
+        return transitions
+
+# ===============================
 # Multi-Scale Feature Extraction (Same as original)
 # ===============================
 class Lambda3MultiScaleAnalyzer:
