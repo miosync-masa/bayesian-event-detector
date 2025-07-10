@@ -42,15 +42,6 @@ This repository showcases the evolution of Lambda³ (Λ³)–based event-driven 
 - **For dozens to ~100 pairs of time series (with typical lengths <5,000 points each), this Colab with NumPyro JIT + CPU is extremely fast and practica.**
 
 ### 5️⃣ `lambda3_numpyro` (Modular & Bayesian NumPyro version, NEW!)
-- **Full modularization & extensible package structure for Lambda³ theory**
-    - Scalable, testable, and OSS-friendly Python package (`lambda3_numpyro`)
-    - **NumPyro/JAX-based Bayesian inference engine** for causal/synchronization analysis
-    - High-speed feature extraction (Numba/JIT), multi-series & cross-network analytics
-    - Plug-and-play: Easily integrate with any notebook, data pipeline, or Colab demo
-    - [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/miosync-masa/bayesian-event-detector/blob/main/lambda3_numpyro/examples/lambda3_colab_setup.ipynb)
-    - *Use*: Advanced Bayesian causal inference, scalable multi-network diagnostics, academic & production-grade analytics
-      
-### 5️⃣ `lambda3_numpyro` (Modular & Bayesian NumPyro version, NEW!)
 
 - **Full modularization & extensible package structure for Lambda³ theory**
     - Scalable, testable, and OSS-friendly Python package (`lambda3_numpyro`)
