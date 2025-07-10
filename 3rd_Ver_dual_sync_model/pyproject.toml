@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-    {name = "飯泉博士", email = "iizumi@lambda3.theory"},
+    {name = "Masamichi iizumi", email = "m.iizumi@miosync.email"},
 ]
 keywords = ["lambda3", "bayesian", "synchronization", "structure-tensor", "time-series"]
 classifiers = [
