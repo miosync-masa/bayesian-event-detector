@@ -20,6 +20,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 from sklearn.cluster import AgglomerativeClustering
+from sklearn.cluster import KMeans
 import networkx as nx
 from numba import jit, njit, prange
 from typing import Tuple, Dict, List, Optional
@@ -496,7 +497,6 @@ class Lambda3RegimeDetector:
             features_dict['rho_T']
         ])
 
-        from sklearn.cluster import KMeans
         km = KMeans(n_clusters=self.n_regimes, random_state=42)
         labels = km.fit_predict(X)
         self.regime_labels = labels
@@ -517,6 +517,170 @@ class Lambda3RegimeDetector:
         """
         return {r: f"Regime-{r+1}" for r in range(self.n_regimes)}
 
+# ===============================
+# Financial-Specific Regime Detection
+# ===============================
+class Lambda3FinancialRegimeDetector(Lambda3RegimeDetector):
+    """
+    Financial market regime detector using Lambda³ features.
+    Detects Bull, Bear, Sideways, and Crisis regimes.
+    """
+    
+    def __init__(self, n_regimes=4, method='adaptive'):
+        super().__init__(n_regimes, method)
+        self.volatility_threshold = None
+        self.crisis_threshold = None
+        
+    def fit(self, features_dict, market_data=None):
+        """
+        Enhanced fit method for financial markets.
+        
+        Args:
+            features_dict: Dictionary containing Lambda³ features
+            market_data: Optional raw market data for additional context
+        """
+        # Stack features for clustering
+        X = np.column_stack([
+            features_dict['delta_LambdaC_pos'],
+            features_dict['delta_LambdaC_neg'],
+            features_dict['rho_T']
+        ])
+        
+        # Add market-specific features if available
+        if market_data is not None:
+            # Calculate returns for trend detection
+            returns = np.diff(market_data, prepend=market_data[0]) / market_data[0]
+            rolling_returns = np.array([np.mean(returns[max(0, i-20):i+1]) for i in range(len(returns))])
+            
+            # Add rolling returns as feature
+            X = np.column_stack([X, rolling_returns])
+        
+        # Normalize features
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Use adaptive clustering
+        if self.method == 'adaptive':
+            # Try multiple methods and select best
+            methods = ['kmeans', 'gmm']
+            best_labels = None
+            best_score = -np.inf
+            
+            for method in methods:
+                if method == 'kmeans':
+                    from sklearn.cluster import KMeans
+                    km = KMeans(n_clusters=self.n_regimes, random_state=42, n_init=20)
+                    labels = km.fit_predict(X_scaled)
+                else:  # gmm
+                    from sklearn.mixture import GaussianMixture
+                    gmm = GaussianMixture(n_components=self.n_regimes, random_state=42)
+                    labels = gmm.fit_predict(X_scaled)
+                
+                # Score based on regime separation
+                score = self._score_regime_separation(X_scaled, labels)
+                if score > best_score:
+                    best_score = score
+                    best_labels = labels
+            
+            labels = best_labels
+        else:
+            # Use standard method
+            labels = super().fit(features_dict)
+        
+        self.regime_labels = labels
+        
+        # Calculate financial regime statistics
+        self._calculate_financial_stats(X, labels, market_data)
+        
+        return labels
+    
+    def _score_regime_separation(self, X, labels):
+        """Score regime separation quality."""
+        unique_labels = np.unique(labels)
+        if len(unique_labels) < 2:
+            return -np.inf
+        
+        # Calculate silhouette-like score
+        from sklearn.metrics import silhouette_score
+        try:
+            return silhouette_score(X, labels)
+        except:
+            return -np.inf
+    
+    def _calculate_financial_stats(self, X, labels, market_data):
+        """Calculate financial-specific regime statistics."""
+        self.regime_features = {}
+        
+        for r in range(self.n_regimes):
+            mask = (labels == r)
+            n_points = np.sum(mask)
+            
+            if n_points > 0:
+                stats = {
+                    'frequency': n_points / len(labels),
+                    'mean_rhoT': np.mean(X[mask, 2]),
+                    'std_rhoT': np.std(X[mask, 2]),
+                    'mean_pos_jumps': np.mean(X[mask, 0]),
+                    'mean_neg_jumps': np.mean(X[mask, 1]),
+                    'jump_asymmetry': np.mean(X[mask, 0]) - np.mean(X[mask, 1])
+                }
+                
+                # Add market data statistics if available
+                if market_data is not None:
+                    regime_returns = np.diff(market_data[mask], prepend=market_data[mask][0]) / market_data[mask][0]
+                    stats.update({
+                        'mean_return': np.mean(regime_returns),
+                        'volatility': np.std(regime_returns),
+                        'sharpe_ratio': np.mean(regime_returns) / (np.std(regime_returns) + 1e-8)
+                    })
+                
+                self.regime_features[r] = stats
+    
+    def label_financial_regimes(self):
+        """
+        Assign financial market labels to each regime.
+        """
+        if not self.regime_features:
+            return {r: f"Regime-{r+1}" for r in range(self.n_regimes)}
+        
+        labels = {}
+        regime_chars = []
+        
+        # Characterize each regime
+        for r in range(self.n_regimes):
+            stats = self.regime_features[r]
+            
+            # Determine regime type based on characteristics
+            high_vol = stats['mean_rhoT'] > np.median([s['mean_rhoT'] for s in self.regime_features.values()])
+            positive_bias = stats['jump_asymmetry'] > 0
+            
+            if 'mean_return' in stats:
+                positive_return = stats['mean_return'] > 0
+                high_sharpe = stats['sharpe_ratio'] > 0.5
+            else:
+                positive_return = positive_bias
+                high_sharpe = not high_vol
+            
+            # Classify regime
+            if high_vol and not high_sharpe:
+                regime_type = "Crisis"
+            elif positive_return and not high_vol:
+                regime_type = "Bull"
+            elif not positive_return and high_vol:
+                regime_type = "Bear"
+            else:
+                regime_type = "Sideways"
+            
+            regime_chars.append((r, regime_type, stats['frequency']))
+        
+        # Sort by frequency and assign final labels
+        regime_chars.sort(key=lambda x: x[2], reverse=True)
+        
+        for i, (r, regime_type, freq) in enumerate(regime_chars):
+            labels[r] = f"{regime_type}-{i+1}"
+        
+        return labels
 
 # ===============================
 # Multi-Scale Feature Extraction
@@ -645,7 +809,6 @@ def lambda3_advanced_analysis(data, features_dict):
         'multi_scale_features': ms_features,
         'scale_breaks': scale_breaks
     }
-
 
 # ===============================
 # Lambda³ Extended Analysis
@@ -930,6 +1093,286 @@ def build_sync_network(event_series_dict: Dict[str, np.ndarray],
 
     print(f"\nNetwork summary: {G.number_of_nodes()} nodes, {edge_count} edges")
     return G
+
+
+# ===============================
+# Multi-Asset Regime Analysis
+# ===============================
+def analyze_multi_asset_regimes(
+    features_dict: Dict[str, Dict],
+    market_data_dict: Dict[str, np.ndarray],
+    config: L3Config,
+    n_regimes: int = 4
+):
+    """
+    Analyze regimes across multiple financial assets.
+    
+    Args:
+        features_dict: Lambda³ features for all assets
+        market_data_dict: Raw market data for all assets
+        config: Analysis configuration
+        n_regimes: Number of regimes to detect
+    
+    Returns:
+        Dict with regime analysis results
+    """
+    print(f"\n{'='*60}")
+    print("MULTI-ASSET REGIME ANALYSIS")
+    print(f"{'='*60}")
+    
+    # 1. Individual asset regime detection
+    asset_regimes = {}
+    regime_detectors = {}
+    
+    for asset_name, features in features_dict.items():
+        print(f"\nAnalyzing {asset_name} regimes...")
+        
+        detector = Lambda3FinancialRegimeDetector(n_regimes=n_regimes)
+        market_data = market_data_dict.get(asset_name)
+        
+        regimes = detector.fit(features, market_data)
+        regime_labels = detector.label_financial_regimes()
+        
+        asset_regimes[asset_name] = {
+            'regimes': regimes,
+            'labels': regime_labels,
+            'detector': detector
+        }
+        
+        print(f"{asset_name} Regime Distribution:")
+        for regime_id, label in regime_labels.items():
+            stats = detector.regime_features[regime_id]
+            print(f"  {label}: {stats['frequency']:.1%} "
+                  f"(ρT={stats['mean_rhoT']:.3f}, "
+                  f"Asymmetry={stats['jump_asymmetry']:.3f})")
+    
+    # 2. Cross-asset regime synchronization
+    print(f"\n{'='*40}")
+    print("CROSS-ASSET REGIME SYNCHRONIZATION")
+    print(f"{'='*40}")
+    
+    asset_names = list(features_dict.keys())
+    regime_sync_matrix = np.zeros((len(asset_names), len(asset_names)))
+    
+    for i, asset_a in enumerate(asset_names):
+        for j, asset_b in enumerate(asset_names):
+            if i != j:
+                regimes_a = asset_regimes[asset_a]['regimes']
+                regimes_b = asset_regimes[asset_b]['regimes']
+                
+                # Calculate regime synchronization
+                sync_rate = calculate_regime_sync(regimes_a, regimes_b)
+                regime_sync_matrix[i, j] = sync_rate
+            else:
+                regime_sync_matrix[i, j] = 1.0
+    
+    # Plot regime synchronization matrix
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(regime_sync_matrix, 
+                annot=True, fmt='.3f',
+                xticklabels=asset_names,
+                yticklabels=asset_names,
+                cmap="Reds", vmin=0, vmax=1,
+                square=True)
+    plt.title("Cross-Asset Regime Synchronization Matrix")
+    plt.tight_layout()
+    plt.show()
+    
+    # 3. Regime-specific cross-asset analysis
+    print(f"\n{'='*40}")
+    print("REGIME-SPECIFIC CROSS-ASSET ANALYSIS")
+    print(f"{'='*40}")
+    
+    regime_interactions = analyze_regime_interactions(
+        features_dict, asset_regimes, config
+    )
+    
+    return {
+        'asset_regimes': asset_regimes,
+        'regime_sync_matrix': regime_sync_matrix,
+        'regime_interactions': regime_interactions
+    }
+
+def calculate_regime_sync(regimes_a, regimes_b):
+    """Calculate synchronization rate between two regime series."""
+    if len(regimes_a) != len(regimes_b):
+        return 0.0
+    
+    # Calculate agreement rate
+    agreement = np.sum(regimes_a == regimes_b) / len(regimes_a)
+    
+    # Adjust for chance agreement
+    unique_a = len(np.unique(regimes_a))
+    unique_b = len(np.unique(regimes_b))
+    chance_agreement = 1.0 / max(unique_a, unique_b)
+    
+    # Kappa-like adjustment
+    adjusted_sync = (agreement - chance_agreement) / (1 - chance_agreement + 1e-8)
+    return max(0, adjusted_sync)
+
+def analyze_regime_interactions(
+    features_dict: Dict[str, Dict],
+    asset_regimes: Dict[str, Dict],
+    config: L3Config
+):
+    """
+    Analyze interactions between assets in different regime combinations.
+    """
+    from itertools import combinations
+    
+    asset_names = list(features_dict.keys())
+    regime_interactions = {}
+    
+    # Analyze all asset pairs
+    for asset_a, asset_b in combinations(asset_names, 2):
+        print(f"\nAnalyzing regime interactions: {asset_a} ↔ {asset_b}")
+        
+        regimes_a = asset_regimes[asset_a]['regimes']
+        regimes_b = asset_regimes[asset_b]['regimes']
+        
+        # Get regime labels
+        labels_a = asset_regimes[asset_a]['labels']
+        labels_b = asset_regimes[asset_b]['labels']
+        
+        # Analyze interaction for each regime combination
+        pair_interactions = {}
+        
+        for regime_a in range(len(labels_a)):
+            for regime_b in range(len(labels_b)):
+                mask = (regimes_a == regime_a) & (regimes_b == regime_b)
+                
+                if np.sum(mask) > 20:  # Minimum points for analysis
+                    label_a = labels_a[regime_a]
+                    label_b = labels_b[regime_b]
+                    
+                    # Calculate interaction strength for this regime combination
+                    interaction = calculate_regime_interaction(
+                        features_dict[asset_a], features_dict[asset_b], mask
+                    )
+                    
+                    pair_interactions[f"{label_a}_{label_b}"] = {
+                        'interaction_strength': interaction,
+                        'frequency': np.sum(mask) / len(mask),
+                        'regime_a': regime_a,
+                        'regime_b': regime_b
+                    }
+        
+        regime_interactions[f"{asset_a}_{asset_b}"] = pair_interactions
+    
+    return regime_interactions
+
+def calculate_regime_interaction(features_a, features_b, mask):
+    """Calculate interaction strength between two assets in a specific regime."""
+    if np.sum(mask) < 10:
+        return 0.0
+    
+    # Calculate correlation of structural changes
+    delta_a = features_a['delta_LambdaC_pos'][mask] - features_a['delta_LambdaC_neg'][mask]
+    delta_b = features_b['delta_LambdaC_pos'][mask] - features_b['delta_LambdaC_neg'][mask]
+    
+    # Calculate correlation
+    if np.std(delta_a) > 1e-8 and np.std(delta_b) > 1e-8:
+        correlation = np.corrcoef(delta_a, delta_b)[0, 1]
+        return abs(correlation)
+    else:
+        return 0.0
+
+# ===============================
+# Crisis Detection Enhancement
+# ===============================
+def detect_financial_crises(
+    features_dict: Dict[str, Dict],
+    market_data_dict: Dict[str, np.ndarray],
+    crisis_threshold: float = 0.8
+):
+    """
+    Detect financial crisis periods using Lambda³ features.
+    
+    Args:
+        features_dict: Lambda³ features for all assets
+        market_data_dict: Raw market data
+        crisis_threshold: Threshold for crisis detection
+    
+    Returns:
+        Crisis periods and characteristics
+    """
+    print(f"\n{'='*50}")
+    print("FINANCIAL CRISIS DETECTION")
+    print(f"{'='*50}")
+    
+    # Calculate crisis indicators
+    crisis_indicators = {}
+    
+    for asset_name, features in features_dict.items():
+        # Crisis indicators based on Lambda³ features
+        tension = features['rho_T']
+        jumps = features['delta_LambdaC_pos'] + features['delta_LambdaC_neg']
+        
+        # Normalized crisis score
+        crisis_score = (tension - np.mean(tension)) / (np.std(tension) + 1e-8)
+        jump_score = (jumps - np.mean(jumps)) / (np.std(jumps) + 1e-8)
+        
+        combined_score = 0.6 * crisis_score + 0.4 * jump_score
+        crisis_indicators[asset_name] = combined_score
+    
+    # Aggregate crisis score across all assets
+    all_scores = np.array(list(crisis_indicators.values()))
+    aggregate_crisis = np.mean(all_scores, axis=0)
+    
+    # Detect crisis periods
+    crisis_periods = aggregate_crisis > crisis_threshold
+    crisis_starts = np.where(np.diff(crisis_periods.astype(int)) == 1)[0]
+    crisis_ends = np.where(np.diff(crisis_periods.astype(int)) == -1)[0]
+    
+    # Handle edge cases
+    if crisis_periods[0]:
+        crisis_starts = np.concatenate([[0], crisis_starts])
+    if crisis_periods[-1]:
+        crisis_ends = np.concatenate([crisis_ends, [len(crisis_periods) - 1]])
+    
+    # Match starts and ends
+    crisis_episodes = []
+    for start in crisis_starts:
+        end_candidates = crisis_ends[crisis_ends > start]
+        if len(end_candidates) > 0:
+            end = end_candidates[0]
+            crisis_episodes.append((start, end))
+    
+    print(f"Detected {len(crisis_episodes)} crisis episodes:")
+    for i, (start, end) in enumerate(crisis_episodes):
+        duration = end - start + 1
+        max_score = np.max(aggregate_crisis[start:end+1])
+        print(f"  Episode {i+1}: Steps {start}-{end} (Duration: {duration}, Max Score: {max_score:.2f})")
+    
+    # Plot crisis detection
+    plt.figure(figsize=(15, 8))
+    
+    # Plot individual asset crisis scores
+    for asset_name, scores in crisis_indicators.items():
+        plt.plot(scores, alpha=0.6, label=asset_name)
+    
+    # Plot aggregate score
+    plt.plot(aggregate_crisis, 'k-', linewidth=2, label='Aggregate Crisis Score')
+    plt.axhline(y=crisis_threshold, color='r', linestyle='--', label=f'Crisis Threshold ({crisis_threshold})')
+    
+    # Highlight crisis periods
+    for start, end in crisis_episodes:
+        plt.axvspan(start, end, alpha=0.2, color='red')
+    
+    plt.title("Financial Crisis Detection - Lambda³ Analysis")
+    plt.xlabel("Time Step")
+    plt.ylabel("Crisis Score")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    
+    return {
+        'crisis_periods': crisis_periods,
+        'crisis_episodes': crisis_episodes,
+        'crisis_indicators': crisis_indicators,
+        'aggregate_crisis': aggregate_crisis
+    }
 
 # ===============================
 # Visualization Functions
@@ -1705,6 +2148,149 @@ def create_analysis_summary(series_names: List[str],
         print(f"{name_a:15s} ↔ {name_b:15s} | σₛ = {sync_rate:.3f}")
 
     print("\n" + "="*60)
+
+
+# ===============================
+# Enhanced Main Analysis with Regime Detection
+# ===============================
+def main_financial_analysis_with_regimes(
+    csv_path: str = "financial_data_2024.csv",
+    config: L3Config = None,
+    n_regimes: int = 4,
+    detect_crises: bool = True,
+    crisis_threshold: float = 0.8
+):
+    """
+    Main analysis pipeline with financial regime detection.
+    
+    Args:
+        csv_path: Path to financial data CSV
+        config: Analysis configuration
+        n_regimes: Number of regimes to detect
+        detect_crises: Whether to detect crisis periods
+        crisis_threshold: Threshold for crisis detection
+    
+    Returns:
+        Complete analysis results including regime analysis
+    """
+    if config is None:
+        config = L3Config()
+    
+    # Run standard Lambda³ analysis first
+    print("Running standard Lambda³ analysis...")
+    features_dict, sync_mat = main_csv_analysis(
+        csv_path=csv_path,
+        config=config,
+        analyze_all_pairs=True,
+        max_pairs=10
+    )
+    
+    # Load raw market data for regime analysis
+    market_data_dict = {}
+    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+    
+    for col in df.columns:
+        market_data_dict[col] = df[col].values
+    
+    # Multi-asset regime analysis
+    regime_results = analyze_multi_asset_regimes(
+        features_dict, market_data_dict, config, n_regimes
+    )
+    
+    # Crisis detection
+    crisis_results = None
+    if detect_crises:
+        crisis_results = detect_financial_crises(
+            features_dict, market_data_dict, crisis_threshold
+        )
+    
+    # Create comprehensive financial report
+    create_financial_regime_report(
+        features_dict, regime_results, crisis_results, list(market_data_dict.keys())
+    )
+    
+    return {
+        'features_dict': features_dict,
+        'sync_mat': sync_mat,
+        'regime_results': regime_results,
+        'crisis_results': crisis_results
+    }
+
+def create_financial_regime_report(
+    features_dict: Dict,
+    regime_results: Dict,
+    crisis_results: Dict,
+    asset_names: List[str]
+):
+    """Create comprehensive financial regime analysis report."""
+    print(f"\n{'='*70}")
+    print("FINANCIAL REGIME ANALYSIS REPORT")
+    print(f"{'='*70}")
+    
+    # Asset regime summary
+    print("\nAsset Regime Summary:")
+    print("-" * 50)
+    
+    for asset_name in asset_names:
+        if asset_name in regime_results['asset_regimes']:
+            regime_info = regime_results['asset_regimes'][asset_name]
+            detector = regime_info['detector']
+            
+            print(f"\n{asset_name}:")
+            for regime_id, label in regime_info['labels'].items():
+                stats = detector.regime_features[regime_id]
+                print(f"  {label}: {stats['frequency']:.1%} of time")
+                if 'mean_return' in stats:
+                    print(f"    - Mean Return: {stats['mean_return']:.3f}")
+                    print(f"    - Volatility: {stats['volatility']:.3f}")
+                    print(f"    - Sharpe Ratio: {stats['sharpe_ratio']:.3f}")
+                print(f"    - Structural Tension (ρT): {stats['mean_rhoT']:.3f}")
+                print(f"    - Jump Asymmetry: {stats['jump_asymmetry']:.3f}")
+    
+    # Cross-asset regime synchronization
+    print(f"\n{'='*50}")
+    print("CROSS-ASSET REGIME SYNCHRONIZATION")
+    print(f"{'='*50}")
+    
+    sync_matrix = regime_results['regime_sync_matrix']
+    
+    # Find highest synchronization pairs
+    sync_pairs = []
+    for i in range(len(asset_names)):
+        for j in range(i+1, len(asset_names)):
+            sync_pairs.append((sync_matrix[i,j], asset_names[i], asset_names[j]))
+    
+    sync_pairs.sort(reverse=True)
+    
+    print("\nTop Regime Synchronization Pairs:")
+    for sync_rate, asset_a, asset_b in sync_pairs[:5]:
+        print(f"  {asset_a} ↔ {asset_b}: {sync_rate:.3f}")
+    
+    # Crisis analysis
+    if crisis_results:
+        print(f"\n{'='*50}")
+        print("CRISIS ANALYSIS")
+        print(f"{'='*50}")
+        
+        episodes = crisis_results['crisis_episodes']
+        print(f"\nDetected {len(episodes)} crisis episodes:")
+        
+        for i, (start, end) in enumerate(episodes):
+            duration = end - start + 1
+            severity = np.max(crisis_results['aggregate_crisis'][start:end+1])
+            print(f"  Episode {i+1}: Duration {duration} steps, Severity {severity:.2f}")
+    
+    # Lambda³ theoretical insights
+    print(f"\n{'='*50}")
+    print("LAMBDA³ THEORETICAL INSIGHTS")
+    print(f"{'='*50}")
+    print("• Market regimes represent discrete structural configurations")
+    print("• Crisis periods show elevated structural tension (ρT)")
+    print("• Cross-asset synchronization reveals systemic coupling")
+    print("• Jump asymmetry indicates directional market bias")
+    print("• Regime transitions are structural phase changes, not temporal evolution")
+    
+    print(f"\n{'='*70}")
 
 # ===============================
 # Main Execution Block
