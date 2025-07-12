@@ -4,7 +4,7 @@
 # Complete Organized Framework for Structural Tensor Analysis
 # No time causality - structural pulsations (∆ΛC)
 #
-# Author: Masamichi Iizumi (Miosync, Inc.)
+# Author: Mamichi Iizumi (Miosync, Inc.)
 # License: MIT
 # ==========================================================
 
@@ -58,6 +58,115 @@ class L3Config:
     target_accept: float = 0.95
     var_names: list = ('beta_time_a', 'beta_time_b', 'beta_interact', 'beta_rhoT_a', 'beta_rhoT_b')
     hdi_prob: float = 0.94
+
+# ===============================
+# SECTION 0: DATA HANDLING
+# ===============================
+def fetch_financial_data(
+    start_date="2022-01-01",
+    end_date="2024-12-31",
+    tickers=None,
+    desired_order=None,
+    csv_filename="financial_data_2022to2024.csv",
+    verbose=True
+):
+    """Fetch, preprocess, and save multi-market financial time series data."""
+    if tickers is None:
+        tickers = {
+            "USD/JPY": "JPY=X",
+            "OIL": "CL=F",        # WTI原油先物
+            "GOLD": "GC=F",       # 金先物
+            "Nikkei 225": "^N225",
+            "Dow Jones": "^DJI"
+        }
+    if desired_order is None:
+        desired_order = ["USD/JPY", "OIL", "GOLD", "Nikkei 225", "Dow Jones"]
+
+    if verbose:
+        print(f"Fetching daily data from {start_date} to {end_date}...")
+
+    try:
+        # 各ティッカーを個別にダウンロードして結合（データ長の不整合を防ぐ）
+        all_data = {}
+        for name, ticker in tickers.items():
+            try:
+                ticker_data = yf.download(ticker, start=start_date, end=end_date)['Close']
+                if len(ticker_data) > 0:
+                    all_data[name] = ticker_data
+                    if verbose:
+                        print(f"  {name}: {len(ticker_data)} data points")
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Failed to download {name} ({ticker}): {e}")
+                continue
+
+        if not all_data:
+            raise ValueError("No data could be downloaded")
+
+        # 共通の日付範囲を見つける
+        common_dates = None
+        for name, data in all_data.items():
+            if common_dates is None:
+                common_dates = set(data.index)
+            else:
+                common_dates = common_dates.intersection(set(data.index))
+
+        common_dates = sorted(list(common_dates))
+
+        if len(common_dates) < 50:
+            raise ValueError(f"Insufficient common dates: {len(common_dates)}")
+
+        # 共通日付でデータを整列
+        final_data = pd.DataFrame(index=common_dates)
+        for name in desired_order:
+            if name in all_data:
+                final_data[name] = all_data[name].reindex(common_dates)
+
+        # 欠損値処理
+        final_data = final_data.dropna()
+
+        if verbose:
+            print(f"\nFinal data shape: {final_data.shape}")
+            print(f"Date range: {final_data.index[0]} to {final_data.index[-1]}")
+            print(final_data.head())
+
+        final_data.to_csv(csv_filename, index=True)
+        if verbose:
+            print(f"\nData saved to '{csv_filename}'.")
+
+        return final_data
+
+    except Exception as e:
+        print(f"Error fetching data: {e}")
+        return None
+
+
+
+def load_csv_data(filepath: str, time_column: Optional[str] = None,
+                  value_columns: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
+    df = pd.read_csv(filepath, parse_dates=True)
+
+    print(f"Loaded CSV with shape: {df.shape}")
+    print(f"Columns: {list(df.columns)}")
+
+    if time_column and time_column in df.columns:
+        df = df.sort_values(by=time_column)
+
+    if value_columns is None:
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if time_column and time_column in numeric_cols:
+            numeric_cols.remove(time_column)
+        value_columns = numeric_cols
+
+    series_dict = {}
+    for col in value_columns:
+        if col in df.columns:
+            data = df[col].values
+            if pd.isna(data).any():
+                data = pd.Series(data).ffill().bfill().values
+            series_dict[col] = data.astype(np.float64)
+
+    return series_dict
 
 # ===============================
 # SECTION 1: JIT-COMPILED CORE FUNCTIONS
@@ -459,6 +568,10 @@ class Lambda3RegimeDetector:
         """Assign descriptive labels to each regime."""
         return {r: f"Regime-{r+1}" for r in range(self.n_regimes)}
 
+# ===============================
+# SECTION 4.5: Finance REGIME
+# ===============================
+
 class Lambda3FinancialRegimeDetector(Lambda3RegimeDetector):
     """Financial market regime detector with Bull/Bear/Crisis classification."""
 
@@ -652,41 +765,6 @@ def build_sync_network(event_series_dict: Dict[str, np.ndarray],
 
     print(f"\nNetwork summary: {G.number_of_nodes()} nodes, {edge_count} edges")
     return G
-
-def analyze_hierarchical_synchronization(
-    features_dict_a: Dict[str, np.ndarray],
-    features_dict_b: Dict[str, np.ndarray],
-    lag_window: int = 10
-) -> Dict[str, Dict[str, float]]:
-    """
-    階層的構造変化の同期分析
-    """
-    sync_results = {}
-
-    # 階層別の同期率計算
-    hierarchy_types = [
-        'pure_local_pos', 'pure_local_neg',
-        'pure_global_pos', 'pure_global_neg',
-        'mixed_pos', 'mixed_neg'
-    ]
-
-    for h_type in hierarchy_types:
-        if h_type in features_dict_a and h_type in features_dict_b:
-            events_a = features_dict_a[h_type].astype(np.float64)
-            events_b = features_dict_b[h_type].astype(np.float64)
-
-            # 同期プロファイル計算
-            lags, sync_values, max_sync, optimal_lag = calculate_sync_profile_jit(
-                events_a, events_b, lag_window
-            )
-
-            sync_results[h_type] = {
-                'max_sync': float(max_sync),
-                'optimal_lag': int(optimal_lag),
-                'sync_profile': {int(lag): float(sync) for lag, sync in zip(lags, sync_values)}
-            }
-
-    return sync_results
 
 # ===============================
 # SECTION 6: CAUSALITY ANALYSIS
@@ -901,115 +979,6 @@ def detect_financial_crises(
     }
 
 # ===============================
-# SECTION 8: DATA HANDLING
-# ===============================
-def fetch_financial_data(
-    start_date="2022-01-01",
-    end_date="2024-12-31",
-    tickers=None,
-    desired_order=None,
-    csv_filename="financial_data_2022to2024.csv",
-    verbose=True
-):
-    """Fetch, preprocess, and save multi-market financial time series data."""
-    if tickers is None:
-        tickers = {
-            "USD/JPY": "JPY=X",
-            "OIL": "CL=F",        # WTI原油先物
-            "GOLD": "GC=F",       # 金先物
-            "Nikkei 225": "^N225",
-            "Dow Jones": "^DJI"
-        }
-    if desired_order is None:
-        desired_order = ["USD/JPY", "OIL", "GOLD", "Nikkei 225", "Dow Jones"]
-
-    if verbose:
-        print(f"Fetching daily data from {start_date} to {end_date}...")
-
-    try:
-        # 各ティッカーを個別にダウンロードして結合（データ長の不整合を防ぐ）
-        all_data = {}
-        for name, ticker in tickers.items():
-            try:
-                ticker_data = yf.download(ticker, start=start_date, end=end_date)['Close']
-                if len(ticker_data) > 0:
-                    all_data[name] = ticker_data
-                    if verbose:
-                        print(f"  {name}: {len(ticker_data)} data points")
-            except Exception as e:
-                if verbose:
-                    print(f"  Warning: Failed to download {name} ({ticker}): {e}")
-                continue
-
-        if not all_data:
-            raise ValueError("No data could be downloaded")
-
-        # 共通の日付範囲を見つける
-        common_dates = None
-        for name, data in all_data.items():
-            if common_dates is None:
-                common_dates = set(data.index)
-            else:
-                common_dates = common_dates.intersection(set(data.index))
-
-        common_dates = sorted(list(common_dates))
-
-        if len(common_dates) < 50:
-            raise ValueError(f"Insufficient common dates: {len(common_dates)}")
-
-        # 共通日付でデータを整列
-        final_data = pd.DataFrame(index=common_dates)
-        for name in desired_order:
-            if name in all_data:
-                final_data[name] = all_data[name].reindex(common_dates)
-
-        # 欠損値処理
-        final_data = final_data.dropna()
-
-        if verbose:
-            print(f"\nFinal data shape: {final_data.shape}")
-            print(f"Date range: {final_data.index[0]} to {final_data.index[-1]}")
-            print(final_data.head())
-
-        final_data.to_csv(csv_filename, index=True)
-        if verbose:
-            print(f"\nData saved to '{csv_filename}'.")
-
-        return final_data
-
-    except Exception as e:
-        print(f"Error fetching data: {e}")
-        return None
-
-
-
-def load_csv_data(filepath: str, time_column: Optional[str] = None,
-                  value_columns: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
-    df = pd.read_csv(filepath, parse_dates=True)
-
-    print(f"Loaded CSV with shape: {df.shape}")
-    print(f"Columns: {list(df.columns)}")
-
-    if time_column and time_column in df.columns:
-        df = df.sort_values(by=time_column)
-
-    if value_columns is None:
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        if time_column and time_column in numeric_cols:
-            numeric_cols.remove(time_column)
-        value_columns = numeric_cols
-
-    series_dict = {}
-    for col in value_columns:
-        if col in df.columns:
-            data = df[col].values
-            if pd.isna(data).any():
-                data = pd.Series(data).ffill().bfill().values
-            series_dict[col] = data.astype(np.float64)
-
-    return series_dict
-
-# ===============================
 # SECTION 9: INTERACTION COEFFICIENT EXTRACTION
 # ===============================
 
@@ -1124,7 +1093,6 @@ def predict_with_interactions(
 # ===============================
 # SECTION 10: INTRA-SERIES HIERARCHICAL ANALYSIS
 # ===============================
-
 def calc_lambda3_features_hierarchical(data: np.ndarray, config: L3Config) -> Dict[str, np.ndarray]:
     """
     階層的構造変化を含むLambda³特徴量抽出（JIT関数直接使用）
@@ -1194,6 +1162,7 @@ def calc_lambda3_features_hierarchical(data: np.ndarray, config: L3Config) -> Di
 
     return features
 
+
 def calculate_structural_hierarchy_metrics(
     structural_changes: Dict[str, np.ndarray]
 ) -> Dict[str, float]:
@@ -1228,10 +1197,12 @@ def calculate_structural_hierarchy_metrics(
 
     return metrics
 
+
 def prepare_hierarchical_features_for_bayesian(
     structural_changes: Dict[str, np.ndarray],
     original_data: np.ndarray,
-    config
+    config,
+    verbose: bool = False
 ) -> Dict[str, np.ndarray]:
     """
     階層的構造変化特徴量をベイズモデル用に準備
@@ -1254,13 +1225,8 @@ def prepare_hierarchical_features_for_bayesian(
     local_events_mask = (local_pos + local_neg) > 0
     global_events_mask = (global_pos + global_neg) > 0
 
-    print(f"  階層的構造変化イベント:")
-    print(f"    短期: {np.sum(local_events_mask)}")
-    print(f"    長期: {np.sum(global_events_mask)}")
-    print(f"    短期位置: {np.where(local_events_mask)[0][:5]}...")
-    print(f"    長期位置: {np.where(global_events_mask)[0][:5]}...")
-    print(f"    統合正構造変化: {np.sum(combined_pos)}")
-    print(f"    統合負構造変化: {np.sum(combined_neg)}")
+    if verbose:
+        print(f"  階層的構造変化: 短期={np.sum(local_events_mask)}, 長期={np.sum(global_events_mask)}")
 
     # ベイズモデル用特徴量
     hierarchical_features = {
@@ -1268,17 +1234,16 @@ def prepare_hierarchical_features_for_bayesian(
         'delta_LambdaC_neg': combined_neg,
         'rho_T': rho_T,
         'time_trend': time_trend,
-
         # 階層別ρT（構造変化位置でのみ非ゼロ）
         'local_rho_T': rho_T * local_events_mask.astype(float),
         'global_rho_T': rho_T * global_events_mask.astype(float),
-
         # 階層遷移指標
         'escalation_indicator': np.diff(np.concatenate([[0], global_events_mask.astype(float)])),
         'deescalation_indicator': np.diff(np.concatenate([[0], local_events_mask.astype(float)]))
     }
 
     return hierarchical_features
+
 
 def fit_fast_hierarchical_bayesian(
     data: np.ndarray,
@@ -1339,22 +1304,23 @@ def fit_fast_hierarchical_bayesian(
 
     return trace, model
 
+
 def analyze_hierarchical_separation_dynamics(
     series_name: str,
     original_data: np.ndarray,
     structural_changes: Dict[str, np.ndarray],
-    config
+    config,
+    verbose: bool = True
 ) -> Dict[str, any]:
     """
     階層分離ダイナミクス分析（短期・長期構造変化の分離）
     """
-    print(f"\n{'='*60}")
-    print(f"HIERARCHICAL SEPARATION DYNAMICS: {series_name}")
-    print(f"{'='*60}")
+    if verbose:
+        print(f"\n階層分離ダイナミクス解析: {series_name}")
 
     # JIT検出結果を直接ベイズモデル用に準備
     hierarchical_features = prepare_hierarchical_features_for_bayesian(
-        structural_changes, original_data, config
+        structural_changes, original_data, config, verbose=verbose
     )
 
     # 階層イベント数の計算
@@ -1364,14 +1330,11 @@ def analyze_hierarchical_separation_dynamics(
     N_local = np.sum(local_mask)
     N_global = np.sum(global_mask)
 
-    print(f"階層強度特徴量生成完了:")
-    print(f"  短期強度イベント: {N_local}")
-    print(f"  長期強度イベント: {N_global}")
-
     # 十分なイベント数がなければスキップ
     MIN_EVENTS = 10
     if N_local < MIN_EVENTS or N_global < MIN_EVENTS:
-        print(f"Warning: Insufficient events (短期: {N_local}, 長期: {N_global}). Analysis skipped.")
+        if verbose:
+            print(f"  Warning: イベント数不足 (短期: {N_local}, 長期: {N_global})")
         return {}
 
     # ベイズ推定のパラメータ調整
@@ -1402,13 +1365,10 @@ def analyze_hierarchical_separation_dynamics(
             if min_length > 1:
                 local_sample = local_values[:min_length]
                 global_sample = global_values[:min_length]
-
                 try:
                     correlation_matrix = np.corrcoef(local_sample, global_sample)
                     if correlation_matrix.size > 1:
                         hierarchy_correlation = correlation_matrix[0, 1]
-                    else:
-                        hierarchy_correlation = 0.0
                 except:
                     hierarchy_correlation = 0.0
 
@@ -1436,13 +1396,6 @@ def analyze_hierarchical_separation_dynamics(
         'hierarchy_correlation': hierarchy_correlation
     }
 
-    # 信頼区間品質チェック
-    for k, v in separation_coefficients.items():
-        if isinstance(v, dict) and 'hdi_upper' in v and 'hdi_lower' in v:
-            hdi_width = v['hdi_upper'] - v['hdi_lower']
-            if hdi_width > 4.0:
-                print(f"注意: {k}の信頼区間が広すぎます (HDI幅={hdi_width:.2f})")
-
     # 非対称性メトリクス
     asymmetry_metrics = {
         'transition_asymmetry': abs(separation_coefficients['escalation']['coefficient']) - abs(separation_coefficients['deescalation']['coefficient']),
@@ -1450,16 +1403,11 @@ def analyze_hierarchical_separation_dynamics(
         'deescalation_dominance': abs(separation_coefficients['deescalation']['coefficient']) / (abs(separation_coefficients['escalation']['coefficient']) + abs(separation_coefficients['deescalation']['coefficient']) + 1e-8),
     }
 
-    print(f"\n{series_name} 階層分離係数:")
-    for k, v in separation_coefficients.items():
-        if k != 'hierarchy_correlation':
-            print(f"  {k.capitalize()}: {v['coefficient']:.4f} (95% HDI: [{v['hdi_lower']:.4f}, {v['hdi_upper']:.4f}])")
-
-    print(f"\n階層分離非対称性:")
-    for k, v in asymmetry_metrics.items():
-        print(f"  {k}: {v:.4f}")
-
-    print(f"\n階層間相関: {separation_coefficients['hierarchy_correlation']:.4f}")
+    if verbose:
+        print(f"  階層分離係数:")
+        print(f"    エスカレーション: {separation_coefficients['escalation']['coefficient']:.4f}")
+        print(f"    デエスカレーション: {separation_coefficients['deescalation']['coefficient']:.4f}")
+        print(f"    階層間相関: {hierarchy_correlation:.4f}")
 
     return {
         'trace': trace,
@@ -1477,12 +1425,14 @@ def analyze_hierarchical_separation_dynamics(
         'series_name': series_name
     }
 
+
 def complete_hierarchical_analysis(
     data_dict: Dict[str, np.ndarray],
     config,
     local_window: int = 5,
     global_window: int = 30,
-    series_names: List[str] = None
+    series_names: List[str] = None,
+    verbose: bool = True
 ) -> Dict[str, any]:
     """
     完全な階層的構造変化分析 (Lambda³理論準拠)
@@ -1503,37 +1453,34 @@ def complete_hierarchical_analysis(
         長期構造変化検出窓幅
     series_names : List[str], optional
         解析対象系列名リスト
+    verbose : bool
+        詳細ログ出力フラグ
 
     Returns:
     --------
     Dict[str, any]
         階層的構造変化解析結果
-        - 各系列の階層的∆ΛC変化
-        - 階層分離ダイナミクス係数
-        - 階層間同期・因果関係
     """
     if series_names is None:
         series_names = list(data_dict.keys())
 
     results = {}
 
-    print("=" * 80)
-    print("LAMBDA³ HIERARCHICAL STRUCTURAL ANALYSIS INITIATED")
-    print("=" * 80)
-    print(f"構造テンソル系列数: {len(series_names)}")
-    print(f"短期構造窓: {local_window}, 長期構造窓: {global_window}")
+    if verbose:
+        print("=" * 80)
+        print("LAMBDA³ HIERARCHICAL STRUCTURAL ANALYSIS")
+        print("=" * 80)
+        print(f"系列数: {len(series_names)}, 窓幅: 短期={local_window}, 長期={global_window}")
 
     # === STAGE 1: 各系列の階層的構造変化検出 ===
     for name, data in data_dict.items():
         if name not in series_names:
             continue
 
-        print(f"\n{'─' * 60}")
-        print(f"ANALYZING STRUCTURAL TENSOR: {name}")
-        print(f"{'─' * 60}")
-        print(f"データ長: {len(data)}")
+        if verbose:
+            print(f"\n{name}: ", end="")
 
-        # JIT関数による階層的構造変化抽出（添付コード準拠）
+        # JIT関数による階層的構造変化抽出
         structural_changes = calc_lambda3_features_hierarchical(
             data,
             L3Config(
@@ -1544,18 +1491,15 @@ def complete_hierarchical_analysis(
         )
 
         # 階層性メトリクス計算
-        hierarchy_metrics = calculate_structural_hierarchy_metrics(
-            structural_changes
-        )
+        hierarchy_metrics = calculate_structural_hierarchy_metrics(structural_changes)
 
-        print(f"\n構造テンソル階層メトリクス:")
-        for metric_name, value in hierarchy_metrics.items():
-            print(f"  {metric_name}: {value:.4f}")
+        if verbose:
+            print(f"ローカル優勢度={hierarchy_metrics['local_dominance']:.2f}, "
+                  f"エスカレーション率={hierarchy_metrics['escalation_rate']:.2f}")
 
         # === 階層分離ダイナミクス分析 ===
-        print(f"\n階層分離ダイナミクス解析実行中...")
         separation_results = analyze_hierarchical_separation_dynamics(
-            name, data, structural_changes, config
+            name, data, structural_changes, config, verbose=verbose
         )
 
         # 結果統合
@@ -1567,19 +1511,8 @@ def complete_hierarchical_analysis(
             'series_name': name
         }
 
-        # 階層特性サマリー出力
-        if separation_results:
-            sep_coeffs = separation_results.get('separation_coefficients', {})
-            print(f"\n構造テンソル階層特性:")
-            print(f"  エスカレーション係数: {sep_coeffs.get('escalation', {}).get('coefficient', 0):.4f}")
-            print(f"  デエスカレーション係数: {sep_coeffs.get('deescalation', {}).get('coefficient', 0):.4f}")
-            print(f"  短期効果強度: {sep_coeffs.get('local_effect', {}).get('coefficient', 0):.4f}")
-            print(f"  長期効果強度: {sep_coeffs.get('global_effect', {}).get('coefficient', 0):.4f}")
-            print(f"  階層間相関: {sep_coeffs.get('hierarchy_correlation', 0):.4f}")
-
         # 階層分離可視化
-        if separation_results and 'trace' in separation_results:
-            print(f"\n階層分離分析可視化生成中...")
+        if separation_results and 'trace' in separation_results and verbose:
             plot_hierarchical_separation_analysis(
                 separation_results,
                 structural_changes
@@ -1587,9 +1520,9 @@ def complete_hierarchical_analysis(
 
     # === STAGE 2: ペアワイズ階層的同期分析 ===
     if len(series_names) >= 2:
-        print(f"\n{'=' * 80}")
-        print("PAIRWISE HIERARCHICAL SYNCHRONIZATION ANALYSIS")
-        print(f"{'=' * 80}")
+        if verbose:
+            print(f"\n{'=' * 80}")
+            print("ペアワイズ階層的同期分析")
 
         first_series = series_names[0]
         second_series = series_names[1]
@@ -1607,9 +1540,8 @@ def complete_hierarchical_analysis(
         )
 
         if has_hierarchical_features:
-            print(f"\n階層的構造因果関係検出実行中...")
             try:
-                # 既存のdetect_basic_structural_causalityを使用して基本因果関係を検出
+                # 基本因果関係を検出
                 features_for_causality = {}
                 for name in series_names[:2]:
                     if name in results:
@@ -1631,51 +1563,27 @@ def complete_hierarchical_analysis(
                         'analysis_type': 'basic_causality_for_hierarchical'
                     }
                     results['hierarchical_causality'] = causality_results
-
-                    print(f"階層的因果関係検出完了 (基本因果関係を使用)")
-                else:
-                    print(f"因果関係分析用データが不十分です")
-                    results['hierarchical_causality'] = {}
+                    if verbose:
+                        print(f"  階層的因果関係検出完了")
 
             except Exception as e:
-                print(f"階層的因果関係検出エラー: {e}")
+                if verbose:
+                    print(f"  階層的因果関係検出エラー: {e}")
                 results['hierarchical_causality'] = {}
-        else:
-            print(f"警告: 階層的特徴量が不完全です")
-            print(f"  欠損特徴量: {[f for f in required_features if f not in first_changes or f not in second_changes]}")
-            print(f"  基本階層分析のみ実行します")
-
-            results['hierarchical_sync'] = {}
-            results['hierarchical_causality'] = {}
 
     # === STAGE 3: 全体階層構造サマリー ===
-    print(f"\n{'=' * 80}")
-    print("HIERARCHICAL STRUCTURE SUMMARY")
-    print(f"{'=' * 80}")
+    if verbose:
+        print(f"\n{'=' * 80}")
+        print("階層構造サマリー")
+        print(f"{'=' * 80}")
 
-    # 系列別階層特性要約
-    for name in series_names:
-        if name in results:
-            metrics = results[name].get('hierarchy_metrics', {})
-            print(f"\n{name}:")
-            print(f"  ローカル優勢度: {metrics.get('local_dominance', 0):.3f}")
-            print(f"  グローバル優勢度: {metrics.get('global_dominance', 0):.3f}")
-            print(f"  階層結合強度: {metrics.get('coupling_strength', 0):.3f}")
-            print(f"  エスカレーション率: {metrics.get('escalation_rate', 0):.3f}")
-
-    # 階層分析統計
-    total_series = len([name for name in series_names if name in results])
-    sync_analyzed = 1 if 'hierarchical_sync' in results and results['hierarchical_sync'] else 0
-    causality_analyzed = 1 if 'hierarchical_causality' in results and results['hierarchical_causality'] else 0
-
-    print(f"\n解析統計:")
-    print(f"  構造テンソル系列解析数: {total_series}")
-    print(f"  階層同期分析: {'完了' if sync_analyzed else '未実行'}")
-    print(f"  階層因果分析: {'完了' if causality_analyzed else '未実行'}")
-
-    print(f"\n{'=' * 80}")
-    print("LAMBDA³ HIERARCHICAL ANALYSIS COMPLETED")
-    print(f"{'=' * 80}")
+        # 系列別階層特性要約
+        for name in series_names:
+            if name in results:
+                metrics = results[name].get('hierarchy_metrics', {})
+                print(f"{name}: ローカル={metrics.get('local_dominance', 0):.2f}, "
+                      f"グローバル={metrics.get('global_dominance', 0):.2f}, "
+                      f"結合強度={metrics.get('coupling_strength', 0):.2f}")
 
     return results
 
@@ -1684,94 +1592,78 @@ def analyze_hierarchical_synchronization(
     structural_changes_2: Dict[str, np.ndarray],
     series_name_1: str = "Series_A",
     series_name_2: str = "Series_B",
-    config = None
+    config = None,
+    verbose: bool = True
 ) -> Dict[str, any]:
     """
-    階層的構造変化非対称同期分析 (Lambda³理論準拠)
-
-    Lambda³理論: 構造テンソル系列間の真の相互作用は非対称的である
-    階層別∆ΛC変化の非対称相互作用を厳密に解析
+    階層的構造変化同期分析（簡略版）
+    
+    fit_l3_pairwise_bayesian_systemを直接使用して
+    階層的同期を分析する
     """
-    print(f"\n{'='*60}")
-    print(f"HIERARCHICAL ASYMMETRIC SYNCHRONIZATION")
-    print(f"{series_name_1} ⇄ {series_name_2}")
-    print(f"{'='*60}")
+    if verbose:
+        print(f"\n階層的同期分析: {series_name_1} ⇄ {series_name_2}")
 
-    # 階層的特徴量辞書構築
-    features_dict_1 = {
-        'data': structural_changes_1.get('data', np.zeros(100)),
-        'delta_LambdaC_pos': structural_changes_1.get('delta_LambdaC_pos', np.zeros(100)),
-        'delta_LambdaC_neg': structural_changes_1.get('delta_LambdaC_neg', np.zeros(100)),
-        'rho_T': structural_changes_1.get('rho_T', np.zeros(100)),
-        'time_trend': structural_changes_1.get('time_trend', np.arange(100))
+    # データと特徴量の準備
+    data_dict = {
+        series_name_1: structural_changes_1.get('data', np.zeros(100)),
+        series_name_2: structural_changes_2.get('data', np.zeros(100))
     }
-
-    features_dict_2 = {
-        'data': structural_changes_2.get('data', np.zeros(100)),
-        'delta_LambdaC_pos': structural_changes_2.get('delta_LambdaC_pos', np.zeros(100)),
-        'delta_LambdaC_neg': structural_changes_2.get('delta_LambdaC_neg', np.zeros(100)),
-        'rho_T': structural_changes_2.get('rho_T', np.zeros(100)),
-        'time_trend': structural_changes_2.get('time_trend', np.arange(100))
+    
+    features_dict = {
+        series_name_1: structural_changes_1,
+        series_name_2: structural_changes_2
     }
-
-    # データ長の統一
-    min_length = min(len(features_dict_1['data']), len(features_dict_2['data']))
-    for key in features_dict_1.keys():
-        features_dict_1[key] = features_dict_1[key][:min_length]
-        features_dict_2[key] = features_dict_2[key][:min_length]
-
+    
     # デフォルト設定
     if config is None:
-        config = type('L3Config', (), {
-            'draws': 8000, 'tune': 8000, 'target_accept': 0.95
-        })()
+        config = L3Config(draws=8000, tune=8000, target_accept=0.95)
 
-    # === 非対称ペアワイズ分析実行 ===
     try:
-        asymmetric_results = analyze_series_pair_asymmetric(
-            name_a=series_name_1,
-            name_b=series_name_2,
-            features_dict={series_name_1: features_dict_1, series_name_2: features_dict_2},
-            config=config
+        # ペアワイズベイズ推定（既に非対称相互作用を含む）
+        trace, model = fit_l3_pairwise_bayesian_system(
+            data_dict, features_dict, config,
+            series_pair=(series_name_1, series_name_2)
         )
-
-        # 階層的同期メトリクス抽出
-        interaction_coeffs = asymmetric_results['interaction_coefficients']
-        asymmetry_metrics = asymmetric_results['asymmetry_metrics']
-
+        
+        # 相互作用係数の抽出
+        interaction_coeffs = extract_interaction_coefficients(
+            trace, [series_name_1, series_name_2]
+        )
+        
         # 同期強度計算
-        sync_strength_1_to_2 = (
-            abs(interaction_coeffs[f'{series_name_1}_to_{series_name_2}']['pos_jump']) +
-            abs(interaction_coeffs[f'{series_name_1}_to_{series_name_2}']['neg_jump']) +
-            abs(interaction_coeffs[f'{series_name_1}_to_{series_name_2}']['tension'])
+        cross_effects = interaction_coeffs['cross_effects']
+        
+        sync_strength_1_to_2 = sum(
+            abs(v) for v in cross_effects[f'{series_name_1}_to_{series_name_2}'].values()
         ) / 3
-
-        sync_strength_2_to_1 = (
-            abs(interaction_coeffs[f'{series_name_2}_to_{series_name_1}']['pos_jump']) +
-            abs(interaction_coeffs[f'{series_name_2}_to_{series_name_1}']['neg_jump']) +
-            abs(interaction_coeffs[f'{series_name_2}_to_{series_name_1}']['tension'])
+        
+        sync_strength_2_to_1 = sum(
+            abs(v) for v in cross_effects[f'{series_name_2}_to_{series_name_1}'].values()
         ) / 3
-
+        
         overall_sync_strength = (sync_strength_1_to_2 + sync_strength_2_to_1) / 2
-
-        print(f"\n階層的非対称同期結果:")
-        print(f"  {series_name_1} → {series_name_2} 同期強度: {sync_strength_1_to_2:.4f}")
-        print(f"  {series_name_2} → {series_name_1} 同期強度: {sync_strength_2_to_1:.4f}")
-        print(f"  総合同期強度: {overall_sync_strength:.4f}")
-        print(f"  総合非対称性: {asymmetry_metrics['total_asymmetry']:.4f}")
-
+        total_asymmetry = abs(sync_strength_1_to_2 - sync_strength_2_to_1)
+        
+        if verbose:
+            print(f"  同期強度: {series_name_1}→{series_name_2}={sync_strength_1_to_2:.3f}, "
+                  f"{series_name_2}→{series_name_1}={sync_strength_2_to_1:.3f}, "
+                  f"非対称性={total_asymmetry:.3f}")
+        
         return {
-            'asymmetric_analysis': asymmetric_results,
+            'trace': trace,
+            'model': model,
             'sync_strength_1_to_2': sync_strength_1_to_2,
             'sync_strength_2_to_1': sync_strength_2_to_1,
             'overall_sync_strength': overall_sync_strength,
-            'asymmetry_metrics': asymmetry_metrics,
+            'asymmetry': total_asymmetry,
             'interaction_coefficients': interaction_coeffs,
             'series_names': [series_name_1, series_name_2]
         }
-
+        
     except Exception as e:
-        print(f"非対称同期分析エラー: {e}")
+        if verbose:
+            print(f"  階層的同期分析エラー: {e}")
         return {
             'error': str(e),
             'sync_strength_1_to_2': 0.0,
@@ -1783,115 +1675,178 @@ def analyze_hierarchical_synchronization(
 # ===============================
 # SECTION 11: ASYMMETRIC PAIRWISE ANALYSIS
 # ===============================
-
-def analyze_series_pair_asymmetric(
-    name_a: str,
-    name_b: str,
-    features_dict: Dict,
-    config: L3Config
+def analyze_all_pairwise_interactions(
+    series_dict: Dict[str, np.ndarray],
+    features_dict: Dict[str, Dict[str, np.ndarray]],
+    config: L3Config,
+    max_pairs: int = None
 ) -> Dict[str, any]:
     """
-    非対称ペアワイズ構造テンソル相互作用分析
-    Lambda³理論: 真の相互作用は非対称的である
+    全系列間のペアワイズ相互作用分析（簡潔版）
+    Lambda³理論: 構造テンソル相互作用の網羅的解析
+    
+    fit_l3_pairwise_bayesian_systemが既に非対称相互作用を
+    モデル化しているため、これを直接使用
     """
-    print(f"\n{'='*50}")
-    print(f"ASYMMETRIC PAIR ANALYSIS: {name_a} ⇄ {name_b}")
-    print(f"構造テンソル非対称相互作用解析")
-    print(f"{'='*50}")
-
-    feats_a = features_dict[name_a]
-    feats_b = features_dict[name_b]
-
-    # === A系列に対するB系列の影響モデル ===
-    print(f"\n{name_b} → {name_a} 影響を解析中...")
-    trace_b_to_a = fit_l3_bayesian_regression_asymmetric(
-        data=feats_a['data'],
-        features_dict={
-            'delta_LambdaC_pos': feats_a['delta_LambdaC_pos'],
-            'delta_LambdaC_neg': feats_a['delta_LambdaC_neg'],
-            'rho_T': feats_a['rho_T'],
-            'time_trend': feats_a['time_trend']
-        },
-        config=config,
-        interaction_pos=feats_b['delta_LambdaC_pos'],  # B → A
-        interaction_neg=feats_b['delta_LambdaC_neg'],  # B → A
-        interaction_rhoT=feats_b['rho_T']              # B → A
+    from itertools import combinations
+    
+    series_names = list(series_dict.keys())
+    n_series = len(series_names)
+    
+    print(f"\n{'='*80}")
+    print("全系列ペアワイズ相互作用分析")
+    print(f"{'='*80}")
+    print(f"系列数: {n_series}")
+    print(f"総ペア数: {n_series * (n_series - 1) // 2}")
+    
+    # ペアの組み合わせを生成
+    all_pairs = list(combinations(series_names, 2))
+    
+    # max_pairsが指定されている場合は制限
+    if max_pairs and len(all_pairs) > max_pairs:
+        all_pairs = all_pairs[:max_pairs]
+        print(f"分析ペア数を{max_pairs}に制限しました")
+    
+    print(f"分析予定ペア数: {len(all_pairs)}")
+    
+    # 結果格納
+    all_pairwise_results = {
+        'pairs': {},
+        'interaction_matrix': np.zeros((n_series, n_series)),
+        'asymmetry_matrix': np.zeros((n_series, n_series)),
+        'strongest_interactions': [],
+        'summary': {}
+    }
+    
+    # 各ペアの分析
+    for pair_idx, (name_a, name_b) in enumerate(all_pairs):
+        print(f"\n{'─'*60}")
+        print(f"ペア {pair_idx + 1}/{len(all_pairs)}: {name_a} ⇄ {name_b}")
+        
+        try:
+            # ペアワイズベイズ推定（既に非対称相互作用を含む）
+            trace, model = fit_l3_pairwise_bayesian_system(
+                {name_a: series_dict[name_a], name_b: series_dict[name_b]},
+                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
+                config,
+                series_pair=(name_a, name_b)
+            )
+            
+            # 相互作用係数の抽出
+            interaction_coeffs = extract_interaction_coefficients(trace, [name_a, name_b])
+            
+            # 予測
+            predictions = predict_with_interactions(trace, 
+                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
+                [name_a, name_b]
+            )
+            
+            # 因果推論
+            causality_patterns = detect_basic_structural_causality(
+                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
+                [name_a, name_b]
+            )
+            
+            # 結果の保存
+            pair_key = f"{name_a}_vs_{name_b}"
+            pair_results = {
+                'trace': trace,
+                'model': model,
+                'interaction_coefficients': interaction_coeffs,
+                'predictions': predictions,
+                'causality_patterns': causality_patterns,
+                'series_names': [name_a, name_b]
+            }
+            all_pairwise_results['pairs'][pair_key] = pair_results
+            
+            # 相互作用強度の抽出
+            cross_effects = interaction_coeffs['cross_effects']
+            
+            # A → B の総合強度
+            strength_a_to_b = sum(abs(v) for v in cross_effects[f'{name_a}_to_{name_b}'].values())
+            # B → A の総合強度
+            strength_b_to_a = sum(abs(v) for v in cross_effects[f'{name_b}_to_{name_a}'].values())
+            
+            # 行列に格納
+            idx_a = series_names.index(name_a)
+            idx_b = series_names.index(name_b)
+            all_pairwise_results['interaction_matrix'][idx_a, idx_b] = strength_a_to_b
+            all_pairwise_results['interaction_matrix'][idx_b, idx_a] = strength_b_to_a
+            
+            # 非対称性
+            asymmetry = abs(strength_a_to_b - strength_b_to_a)
+            all_pairwise_results['asymmetry_matrix'][idx_a, idx_b] = asymmetry
+            all_pairwise_results['asymmetry_matrix'][idx_b, idx_a] = asymmetry
+            
+            # 強い相互作用の記録
+            total_strength = strength_a_to_b + strength_b_to_a
+            all_pairwise_results['strongest_interactions'].append({
+                'pair': pair_key,
+                'total_strength': total_strength,
+                'asymmetry': asymmetry,
+                'dominant_direction': f'{name_a}→{name_b}' if strength_a_to_b > strength_b_to_a else f'{name_b}→{name_a}',
+                'strength_a_to_b': strength_a_to_b,
+                'strength_b_to_a': strength_b_to_a
+            })
+            
+            # 簡易結果表示
+            print(f"  {name_a} → {name_b}: {strength_a_to_b:.3f}")
+            print(f"  {name_b} → {name_a}: {strength_b_to_a:.3f}")
+            print(f"  非対称性: {asymmetry:.3f}")
+            
+        except Exception as e:
+            print(f"  警告: ペア分析でエラーが発生しました: {str(e)}")
+            continue
+    
+    # 最強相互作用をソート
+    all_pairwise_results['strongest_interactions'].sort(
+        key=lambda x: x['total_strength'], reverse=True
     )
-
-    # === B系列に対するA系列の影響モデル ===
-    print(f"\n{name_a} → {name_b} 影響を解析中...")
-    trace_a_to_b = fit_l3_bayesian_regression_asymmetric(
-        data=feats_b['data'],
-        features_dict={
-            'delta_LambdaC_pos': feats_b['delta_LambdaC_pos'],
-            'delta_LambdaC_neg': feats_b['delta_LambdaC_neg'],
-            'rho_T': feats_b['rho_T'],
-            'time_trend': feats_b['time_trend']
-        },
-        config=config,
-        interaction_pos=feats_a['delta_LambdaC_pos'],  # A → B
-        interaction_neg=feats_a['delta_LambdaC_neg'],  # A → B
-        interaction_rhoT=feats_a['rho_T']              # A → B
-    )
-
-    # === 相互作用係数の抽出 ===
-    summary_b_to_a = az.summary(trace_b_to_a)
-    summary_a_to_b = az.summary(trace_a_to_b)
-
-    # B → A 相互作用係数
-    beta_b_to_a = {
-        'pos_jump': summary_b_to_a.loc['beta_interact_pos', 'mean'] if 'beta_interact_pos' in summary_b_to_a.index else 0,
-        'neg_jump': summary_b_to_a.loc['beta_interact_neg', 'mean'] if 'beta_interact_neg' in summary_b_to_a.index else 0,
-        'tension': summary_b_to_a.loc['beta_interact_stress', 'mean'] if 'beta_interact_stress' in summary_b_to_a.index else 0
+    
+    # サマリー統計
+    interaction_values = all_pairwise_results['interaction_matrix'][
+        all_pairwise_results['interaction_matrix'] > 0
+    ]
+    asymmetry_values = all_pairwise_results['asymmetry_matrix'][
+        np.triu_indices_from(all_pairwise_results['asymmetry_matrix'], k=1)
+    ]
+    
+    all_pairwise_results['summary'] = {
+        'total_pairs_analyzed': len(all_pairwise_results['pairs']),
+        'max_interaction_strength': np.max(interaction_values) if len(interaction_values) > 0 else 0,
+        'mean_interaction_strength': np.mean(interaction_values) if len(interaction_values) > 0 else 0,
+        'max_asymmetry': np.max(asymmetry_values) if len(asymmetry_values) > 0 else 0,
+        'mean_asymmetry': np.mean(asymmetry_values) if len(asymmetry_values) > 0 else 0,
+        'strongest_pair': all_pairwise_results['strongest_interactions'][0] if all_pairwise_results['strongest_interactions'] else None
     }
-
-    # A → B 相互作用係数
-    beta_a_to_b = {
-        'pos_jump': summary_a_to_b.loc['beta_interact_pos', 'mean'] if 'beta_interact_pos' in summary_a_to_b.index else 0,
-        'neg_jump': summary_a_to_b.loc['beta_interact_neg', 'mean'] if 'beta_interact_neg' in summary_a_to_b.index else 0,
-        'tension': summary_a_to_b.loc['beta_interact_stress', 'mean'] if 'beta_interact_stress' in summary_a_to_b.index else 0
-    }
-
-    # === 非対称性指標の計算 ===
-    asymmetry_metrics = {
-        'pos_jump_asymmetry': beta_a_to_b['pos_jump'] - beta_b_to_a['pos_jump'],
-        'neg_jump_asymmetry': beta_a_to_b['neg_jump'] - beta_b_to_a['neg_jump'],
-        'tension_asymmetry': beta_a_to_b['tension'] - beta_b_to_a['tension'],
-        'total_asymmetry': abs(beta_a_to_b['pos_jump'] - beta_b_to_a['pos_jump']) +
-                          abs(beta_a_to_b['neg_jump'] - beta_b_to_a['neg_jump']) +
-                          abs(beta_a_to_b['tension'] - beta_b_to_a['tension'])
-    }
-
-    # === 結果表示 ===
-    print(f"\n非対称構造テンソル相互作用係数:")
-    print(f"  {name_b} → {name_a}:")
-    print(f"    正ジャンプ影響: {beta_b_to_a['pos_jump']:.4f}")
-    print(f"    負ジャンプ影響: {beta_b_to_a['neg_jump']:.4f}")
-    print(f"    張力影響: {beta_b_to_a['tension']:.4f}")
-
-    print(f"  {name_a} → {name_b}:")
-    print(f"    正ジャンプ影響: {beta_a_to_b['pos_jump']:.4f}")
-    print(f"    負ジャンプ影響: {beta_a_to_b['neg_jump']:.4f}")
-    print(f"    張力影響: {beta_a_to_b['tension']:.4f}")
-
-    print(f"\n非対称性指標:")
-    print(f"  正ジャンプ非対称性: {asymmetry_metrics['pos_jump_asymmetry']:.4f}")
-    print(f"  負ジャンプ非対称性: {asymmetry_metrics['neg_jump_asymmetry']:.4f}")
-    print(f"  張力非対称性: {asymmetry_metrics['tension_asymmetry']:.4f}")
-    print(f"  総合非対称性: {asymmetry_metrics['total_asymmetry']:.4f}")
-
-    return {
-        'traces': {
-            f'{name_b}_to_{name_a}': trace_b_to_a,
-            f'{name_a}_to_{name_b}': trace_a_to_b
-        },
-        'interaction_coefficients': {
-            f'{name_b}_to_{name_a}': beta_b_to_a,
-            f'{name_a}_to_{name_b}': beta_a_to_b
-        },
-        'asymmetry_metrics': asymmetry_metrics,
-        'series_names': [name_a, name_b]
-    }
+    
+    # 結果の表示
+    print(f"\n{'='*80}")
+    print("全ペアワイズ分析完了")
+    print(f"{'='*80}")
+    print(f"分析ペア数: {all_pairwise_results['summary']['total_pairs_analyzed']}")
+    print(f"最大相互作用強度: {all_pairwise_results['summary']['max_interaction_strength']:.4f}")
+    print(f"平均相互作用強度: {all_pairwise_results['summary']['mean_interaction_strength']:.4f}")
+    print(f"最大非対称性: {all_pairwise_results['summary']['max_asymmetry']:.4f}")
+    
+    if all_pairwise_results['summary']['strongest_pair']:
+        strongest = all_pairwise_results['summary']['strongest_pair']
+        print(f"\n最強相互作用ペア: {strongest['pair']}")
+        print(f"  総合強度: {strongest['total_strength']:.4f}")
+        print(f"  非対称性: {strongest['asymmetry']:.4f}")
+        print(f"  優勢方向: {strongest['dominant_direction']}")
+    
+    # 上位5ペアの表示
+    print(f"\n相互作用強度上位5ペア:")
+    for i, interaction in enumerate(all_pairwise_results['strongest_interactions'][:5]):
+        print(f"  {i+1}. {interaction['pair']}: "
+              f"強度={interaction['total_strength']:.3f}, "
+              f"非対称性={interaction['asymmetry']:.3f}")
+    
+    # 統合可視化
+    visualize_all_pairwise_results(all_pairwise_results, series_names)
+    
+    return all_pairwise_results
 
 # ===============================
 # SECTION 16: VISUALIZATION
@@ -2618,103 +2573,10 @@ def predict_with_interactions(
         name_b: mu_pred_b
     }
 
-def complete_pairwise_analysis(
-    data_dict: Dict[str, np.ndarray],
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    config,
-    series_pair: Tuple[str, str] = None
-) -> Dict[str, any]:
-    """
-    完全なペアワイズ分析（従来の対称版）
-    """
-    if series_pair is None:
-        series_names = list(data_dict.keys())[:2]
-    else:
-        series_names = list(series_pair)
 
-    print(f"完全なペアワイズ分析: {series_names[0]} ↔ {series_names[1]}")
 
-    # 1. ベイズ推定
-    trace, model = fit_l3_pairwise_bayesian_system(
-        data_dict, features_dict, config, series_pair
-    )
 
-    # 2. 相互作用係数の抽出
-    interaction_coeffs = extract_interaction_coefficients(trace, series_names)
 
-    # 3. 予測
-    predictions = predict_with_interactions(trace, features_dict, series_names)
-
-    # 4. 因果推論
-    causality_patterns = detect_basic_structural_causality(features_dict, series_names)
-
-    # 5. 結果の可視化
-    visualize_pairwise_results(
-        data_dict, features_dict, predictions,
-        interaction_coeffs, causality_patterns, series_names
-    )
-
-    return {
-        'trace': trace,
-        'model': model,
-        'interaction_coefficients': interaction_coeffs,
-        'predictions': predictions,
-        'causality_patterns': causality_patterns,
-        'series_names': series_names
-    }
-
-def complete_asymmetric_pairwise_analysis(
-    data_dict: Dict[str, np.ndarray],
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    config,
-    series_pair: Tuple[str, str] = None
-) -> Dict[str, any]:
-    """
-    完全な非対称ペアワイズ分析
-    Lambda³理論: 真の構造テンソル相互作用は非対称的
-    """
-    if series_pair is None:
-        series_names = list(data_dict.keys())[:2]
-    else:
-        series_names = list(series_pair)
-
-    name_a, name_b = series_names
-    print(f"完全な非対称ペアワイズ分析: {name_a} ⇄ {name_b}")
-
-    # 1. 非対称相互作用分析
-    asymmetric_results = analyze_series_pair_asymmetric(
-        name_a, name_b, features_dict, config
-    )
-
-    # 2. 同時推定モデル (従来の相互ペアワイズ)
-    trace, model = fit_l3_pairwise_bayesian_system(
-        data_dict, features_dict, config, series_pair
-    )
-
-    # 3. 予測計算
-    predictions = predict_with_interactions(trace, features_dict, series_names)
-
-    # 4. 因果推論
-    causality_patterns = detect_basic_structural_causality(features_dict, series_names)
-
-    # 5. 非対称性可視化
-    plot_asymmetric_interaction_analysis(asymmetric_results, features_dict)
-
-    # 6. 統合可視化
-    visualize_pairwise_results(
-        data_dict, features_dict, predictions,
-        asymmetric_results['interaction_coefficients'],
-        causality_patterns, series_names
-    )
-
-    return {
-        'asymmetric_results': asymmetric_results,
-        'symmetric_trace': trace,
-        'symmetric_model': model,
-        'predictions': predictions,
-        'causality_patterns': causality_patterns,
-        'series_names': series_names
-    }
 
 def analyze_multi_asset_regimes(
     features_dict: Dict,
@@ -2870,7 +2732,6 @@ def analyze_complete_causality(
                               structural_causality_metrics)
 
     return causality_results
-
 
 def _build_causality_matrix(
     basic_causality: Dict[str, Dict[int, float]],
@@ -3353,23 +3214,49 @@ def plot_comprehensive_lambda3_dashboard(
     ax6 = fig.add_subplot(gs[2, 2:])
     pairwise_results = results.get('pairwise_results')
     if pairwise_results:
-        interaction_coeffs = pairwise_results['interaction_coefficients']
-        if 'cross_effects' in interaction_coeffs:
-            cross_effects = interaction_coeffs['cross_effects']
-            directions = list(cross_effects.keys())
-            pos_effects = [cross_effects[d]['pos_jump'] for d in directions]
-            neg_effects = [cross_effects[d]['neg_jump'] for d in directions]
-            tension_effects = [cross_effects[d]['tension'] for d in directions]
-            x = np.arange(len(directions))
-            width = 0.25
-            ax6.bar(x - width, pos_effects, width, label='Pos Jump', alpha=0.8)
-            ax6.bar(x, neg_effects, width, label='Neg Jump', alpha=0.8)
-            ax6.bar(x + width, tension_effects, width, label='Tension', alpha=0.8)
+        # 非対称分析の場合と通常分析の場合を分けて処理
+        if 'asymmetric_results' in pairwise_results:
+            # 非対称分析の結果構造
+            interaction_coeffs = pairwise_results['asymmetric_results']['interaction_coefficients']
+        elif 'interaction_coefficients' in pairwise_results:
+            # 通常分析の結果構造
+            interaction_coeffs = pairwise_results['interaction_coefficients']
+        else:
+            interaction_coeffs = None
+            
+        if interaction_coeffs:
+            if 'cross_effects' in interaction_coeffs:
+                cross_effects = interaction_coeffs['cross_effects']
+                directions = list(cross_effects.keys())
+                pos_effects = [cross_effects[d]['pos_jump'] for d in directions]
+                neg_effects = [cross_effects[d]['neg_jump'] for d in directions]
+                tension_effects = [cross_effects[d]['tension'] for d in directions]
+            else:
+                # 直接的な相互作用係数の場合
+                directions = [k for k in interaction_coeffs.keys() if '_to_' in k]
+                pos_effects = [interaction_coeffs[d].get('pos_jump', 0) for d in directions]
+                neg_effects = [interaction_coeffs[d].get('neg_jump', 0) for d in directions]
+                tension_effects = [interaction_coeffs[d].get('tension', 0) for d in directions]
+            
+            if directions:
+                x = np.arange(len(directions))
+                width = 0.25
+                ax6.bar(x - width, pos_effects, width, label='Pos Jump', alpha=0.8)
+                ax6.bar(x, neg_effects, width, label='Neg Jump', alpha=0.8)
+                ax6.bar(x + width, tension_effects, width, label='Tension', alpha=0.8)
+                ax6.set_title('Pairwise Interaction Coefficients')
+                ax6.set_xticks(x)
+                ax6.set_xticklabels([d.replace('_to_', '→') for d in directions], rotation=45)
+                ax6.legend()
+                ax6.grid(True, alpha=0.3)
+            else:
+                ax6.text(0.5, 0.5, 'No interaction data available', 
+                        transform=ax6.transAxes, ha='center', va='center')
+                ax6.set_title('Pairwise Interaction Coefficients')
+        else:
+            ax6.text(0.5, 0.5, 'No interaction coefficients available', 
+                    transform=ax6.transAxes, ha='center', va='center')
             ax6.set_title('Pairwise Interaction Coefficients')
-            ax6.set_xticks(x)
-            ax6.set_xticklabels([d.replace('_to_', '→') for d in directions], rotation=45)
-            ax6.legend()
-            ax6.grid(True, alpha=0.3)
 
     # === 7. Structural Change Event Timeline ===
     ax7 = fig.add_subplot(gs[3, :])
