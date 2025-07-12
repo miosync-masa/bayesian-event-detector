@@ -3137,9 +3137,9 @@ def plot_complete_causality_analysis(
                         linewidth=2, color=color, markersize=4, alpha=0.8)
                 color_idx += 1
 
-    ax1.set_title('基本構造因果関係', fontsize=14, fontweight='bold')
-    ax1.set_xlabel('遅延 (Lag)')
-    ax1.set_ylabel('因果確率')
+    ax1.set_title('Basic structural causation', fontsize=14, fontweight='bold')
+    ax1.set_xlabel('Lag')
+    ax1.set_ylabel('causal probability')
     ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
     ax1.grid(True, alpha=0.3)
 
@@ -3173,17 +3173,17 @@ def plot_complete_causality_analysis(
             bars2 = ax2.bar(x + width/2, causality_values_2_to_1, width,
                            label=f'{name_b}→{name_a}', alpha=0.8, color='lightcoral')
 
-            ax2.set_title('階層的構造因果関係', fontsize=14, fontweight='bold')
-            ax2.set_xlabel('階層タイプ')
-            ax2.set_ylabel('因果強度')
+            ax2.set_title('Hierarchical structural causality', fontsize=14, fontweight='bold')
+            ax2.set_xlabel('Hierarchy type')
+            ax2.set_ylabel('causal strength')
             ax2.set_xticks(x)
             ax2.set_xticklabels(hierarchy_names, rotation=45)
             ax2.legend()
             ax2.grid(True, alpha=0.3)
     else:
-        ax2.text(0.5, 0.5, '階層因果データなし', transform=ax2.transAxes,
+        ax2.text(0.5, 0.5, 'No hierarchical causal data', transform=ax2.transAxes,
                 ha='center', va='center', fontsize=12)
-        ax2.set_title('階層的構造因果関係')
+        ax2.set_title('Hierarchical structural causality')
 
     # === 3. 因果強度サマリー ===
     ax3 = axes[1, 0]
@@ -3199,8 +3199,8 @@ def plot_complete_causality_analysis(
     colors = ['lightblue', 'lightgreen', 'lightpink']
     bars = ax3.bar(summary_labels, summary_values, color=colors, alpha=0.8)
 
-    ax3.set_title('因果強度サマリー', fontsize=14, fontweight='bold')
-    ax3.set_ylabel('因果強度')
+    ax3.set_title('Causal Strength Summary', fontsize=14, fontweight='bold')
+    ax3.set_ylabel('causal strength')
     ax3.grid(True, alpha=0.3)
 
     for bar, value in zip(bars, summary_values):
@@ -3241,7 +3241,7 @@ def plot_complete_causality_analysis(
 
     ax4.set_xlim(0, 1)
     ax4.set_ylim(0, 1)
-    ax4.set_title(f'最強因果関係\n{strongest_direction}\n強度: {strongest_strength:.3f}')
+    ax4.set_title(f'Strongest causal relationship\n{strongest_direction}\nstrength: {strongest_strength:.3f}')
     ax4.axis('off')
 
     plt.tight_layout()
