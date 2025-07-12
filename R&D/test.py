@@ -9,30 +9,65 @@
 # Version: 2.0 (Refactored)
 # ==========================================================
 
+# ==========================================================
+# Λ³ABC: Lambda³ Analytics for Bayes & CausalJunction
+# ----------------------------------------------------
+# Organized Import Statements for Structural Tensor Analysis
+# ==========================================================
+
 # ===============================
-# IMPORTS
+# Standard Library Imports
+# ===============================
+import argparse
+import pickle
+from dataclasses import dataclass
+from itertools import combinations
+from pathlib import Path
+from typing import Tuple, Dict, List, Optional, Any, Union, Callable
+
+# ===============================
+# Scientific Computing
+# ===============================
+import numpy as np
+import pandas as pd
+
+# ===============================
+# Probabilistic Programming & Statistics
 # ===============================
 import pymc as pm
-import numpy as np
 import arviz as az
-import seaborn as sns
-import matplotlib.pyplot as plt
-from dataclasses import dataclass
+
+# ===============================
+# Machine Learning & Clustering
+# ===============================
 from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import silhouette_score
-import networkx as nx
+
+# ===============================
+# Performance Optimization
+# ===============================
 from numba import jit, njit, prange
-from typing import Tuple, Dict, List, Optional, Any
-import pandas as pd
-from pathlib import Path
-import argparse
-from itertools import combinations
-import yfinance as yf
+
+# ===============================
+# Visualization
+# ===============================
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from matplotlib.patches import Circle, FancyBboxPatch
 from matplotlib.collections import LineCollection
-import matplotlib.patches as mpatches
+import seaborn as sns
+
+# ===============================
+# Network Analysis
+# ===============================
+import networkx as nx
+
+# ===============================
+# Financial Data
+# ===============================
+import yfinance as yf
 
 # ===============================
 # GLOBAL CONSTANTS
@@ -2596,7 +2631,7 @@ def run_lambda3_analysis(
     analysis_type: str = "comprehensive",
     target_series: List[str] = None,
     verbose: bool = True
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Lambda³統合分析エントリーポイント
     
@@ -2615,7 +2650,7 @@ def run_lambda3_analysis(
         
     Returns:
     --------
-    Dict[str, any]
+    Dict[str, Any]
         統合分析結果
     """
     if config is None:
@@ -2656,7 +2691,7 @@ def _run_comprehensive_analysis(
     series_dict: Dict[str, np.ndarray],
     config: L3Config,
     verbose: bool = True
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """包括的Lambda³分析の実行"""
     
     results = {
@@ -2758,7 +2793,7 @@ def _run_hierarchical_analysis(
     series_dict: Dict[str, np.ndarray],
     config: L3Config,
     verbose: bool = True
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """階層的分析特化版"""
     
     # 階層的分析を強制有効化
@@ -2810,7 +2845,7 @@ def _run_pairwise_analysis(
     series_dict: Dict[str, np.ndarray],
     config: L3Config,
     verbose: bool = True
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """ペアワイズ分析特化版"""
     
     if len(series_dict) < 2:
@@ -2855,7 +2890,7 @@ def _run_rapid_analysis(
     series_dict: Dict[str, np.ndarray],
     config: L3Config,
     verbose: bool = True
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """高速分析版"""
     
     # 高速設定に変更
@@ -2918,7 +2953,7 @@ def _run_rapid_analysis(
     return results
 
 
-def _print_analysis_summary(results: Dict[str, any]) -> None:
+def _print_analysis_summary(results: Dict[str, Any]) -> None:
     """分析結果サマリーの表示"""
     
     print("\n" + "="*80)
@@ -2994,7 +3029,7 @@ def lambda3_analyze_financial_data(
     end_date: str = "2024-12-31",
     tickers: Dict[str, str] = None,
     analysis_type: str = "comprehensive"
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     金融データのLambda³分析（簡易インターフェース）
     
@@ -3011,7 +3046,7 @@ def lambda3_analyze_financial_data(
         
     Returns:
     --------
-    Dict[str, any]
+    Dict[str, Any]
         分析結果
     """
     # データ取得
@@ -3034,11 +3069,12 @@ def lambda3_analyze_financial_data(
         verbose=True
     )
 
+
 def lambda3_batch_analysis(
     data_files: List[str],
     output_dir: str = "lambda3_results",
     analysis_types: List[str] = None
-) -> Dict[str, Dict[str, any]]:
+) -> Dict[str, Dict[str, Any]]:
     """
     複数データファイルのバッチ分析
     
@@ -3053,7 +3089,7 @@ def lambda3_batch_analysis(
         
     Returns:
     --------
-    Dict[str, Dict[str, any]]
+    Dict[str, Dict[str, Any]]
         ファイル別分析結果
     """
     if analysis_types is None:
@@ -3094,7 +3130,7 @@ def lambda3_batch_analysis(
 
 def lambda3_streaming_analysis(
     initial_data: Dict[str, np.ndarray],
-    update_callback: callable,
+    update_callback: Callable,
     window_size: int = 100,
     update_interval: int = 10
 ) -> None:
@@ -3156,12 +3192,14 @@ def lambda3_streaming_analysis(
             print(f"Error in streaming: {e}")
             continue
 
+
 # ===============================
 # Main Execution Example
 # ===============================
 
 if __name__ == '__main__':
-
+    import argparse
+    
     parser = argparse.ArgumentParser(description='Lambda³ Analytics Framework')
     parser.add_argument('--mode', type=str, default='demo',
                        choices=['demo', 'financial', 'batch', 'custom'],
