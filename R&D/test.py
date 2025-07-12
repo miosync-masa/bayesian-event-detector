@@ -1,11 +1,12 @@
 # ==========================================================
 # Λ³ABC: Lambda³ Analytics for Bayes & CausalJunction
 # ----------------------------------------------------
-# Complete Organized Framework for Structural Tensor Analysis
+# Refactored Framework for Structural Tensor Analysis
 # No time causality - structural pulsations (∆ΛC)
 #
-# Author: Mamichi Iizumi (Miosync, Inc.)
+# Author: Masamichi Iizumi (Miosync, Inc.)
 # License: MIT
+# Version: 2.0 (Refactored)
 # ==========================================================
 
 # ===============================
@@ -51,13 +52,14 @@ class L3Config:
     global_window: int = 30
     delta_percentile: float = DELTA_PERCENTILE
     local_jump_percentile: float = LOCAL_JUMP_PERCENTILE
-    local_threshold_percentile: float = 85.0    # 新規追加
-    global_threshold_percentile: float = 92.5   # 新規追加
+    local_threshold_percentile: float = 85.0
+    global_threshold_percentile: float = 92.5
     draws: int = 8000
     tune: int = 8000
     target_accept: float = 0.95
     var_names: list = ('beta_time_a', 'beta_time_b', 'beta_interact', 'beta_rhoT_a', 'beta_rhoT_b')
     hdi_prob: float = 0.94
+    hierarchical: bool = True  # Enable hierarchical analysis by default
 
 # ===============================
 # SECTION 0: DATA HANDLING
@@ -74,8 +76,8 @@ def fetch_financial_data(
     if tickers is None:
         tickers = {
             "USD/JPY": "JPY=X",
-            "OIL": "CL=F",        # WTI原油先物
-            "GOLD": "GC=F",       # 金先物
+            "OIL": "CL=F",
+            "GOLD": "GC=F",
             "Nikkei 225": "^N225",
             "Dow Jones": "^DJI"
         }
@@ -86,7 +88,6 @@ def fetch_financial_data(
         print(f"Fetching daily data from {start_date} to {end_date}...")
 
     try:
-        # 各ティッカーを個別にダウンロードして結合（データ長の不整合を防ぐ）
         all_data = {}
         for name, ticker in tickers.items():
             try:
@@ -103,7 +104,6 @@ def fetch_financial_data(
         if not all_data:
             raise ValueError("No data could be downloaded")
 
-        # 共通の日付範囲を見つける
         common_dates = None
         for name, data in all_data.items():
             if common_dates is None:
@@ -116,13 +116,11 @@ def fetch_financial_data(
         if len(common_dates) < 50:
             raise ValueError(f"Insufficient common dates: {len(common_dates)}")
 
-        # 共通日付でデータを整列
         final_data = pd.DataFrame(index=common_dates)
         for name in desired_order:
             if name in all_data:
                 final_data[name] = all_data[name].reindex(common_dates)
 
-        # 欠損値処理
         final_data = final_data.dropna()
 
         if verbose:
@@ -139,8 +137,6 @@ def fetch_financial_data(
     except Exception as e:
         print(f"Error fetching data: {e}")
         return None
-
-
 
 def load_csv_data(filepath: str, time_column: Optional[str] = None,
                   value_columns: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
@@ -282,11 +278,8 @@ def detect_local_global_jumps(
     global_percentile: float = 97.0
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    ローカル・グローバル構造変化の階層的検出
-
-    Lambda³理論では構造変化に階層性がある：
-    - ローカルジャンプ: 局所的な構造テンソル変化
-    - グローバルジャンプ: 系全体の構造テンソル変化
+    Hierarchical structural change detection
+    Lambda³ theory: Hierarchy in structural tensor changes
     """
     n = len(data)
     diff = np.empty(n)
@@ -299,9 +292,8 @@ def detect_local_global_jumps(
     global_pos = np.zeros(n, dtype=np.int32)
     global_neg = np.zeros(n, dtype=np.int32)
 
-    # ローカル基準での判定
+    # Local criteria
     for i in range(n):
-        # ローカル窓の設定
         local_start = max(0, i - local_window)
         local_end = min(n, i + local_window + 1)
         local_subset = np.abs(diff[local_start:local_end])
@@ -313,7 +305,7 @@ def detect_local_global_jumps(
             elif diff[i] < -local_threshold:
                 local_neg[i] = 1
 
-    # グローバル基準での判定
+    # Global criteria
     global_threshold_pos = np.percentile(np.abs(diff), global_percentile)
     global_threshold_neg = -global_threshold_pos
 
@@ -326,26 +318,105 @@ def detect_local_global_jumps(
     return local_pos, local_neg, global_pos, global_neg
 
 # ===============================
-# SECTION 2: FEATURE EXTRACTION
+# SECTION 2: UNIFIED FEATURE EXTRACTION
 # ===============================
 
-def calc_lambda3_features_v2(data: np.ndarray, config: L3Config) -> Tuple[np.ndarray, ...]:
+def calc_lambda3_features(data: np.ndarray, config: L3Config) -> Dict[str, np.ndarray]:
     """
-    Lambda³ feature extraction using JIT-compiled functions.
+    Unified Lambda³ feature extraction with hierarchical support.
     Extracts structural change (ΔΛC) and tension scalar (ρT) features.
     """
-    diff, threshold = calculate_diff_and_threshold(data, DELTA_PERCENTILE)
-    delta_pos, delta_neg = detect_jumps(diff, threshold)
+    if config.hierarchical:
+        # Hierarchical structural change detection
+        local_pos, local_neg, global_pos, global_neg = detect_local_global_jumps(
+            data,
+            config.local_window,
+            config.global_window,
+            config.local_threshold_percentile,
+            config.global_threshold_percentile
+        )
+        
+        # Combined structural changes
+        combined_pos = np.maximum(local_pos.astype(np.float64), global_pos.astype(np.float64))
+        combined_neg = np.maximum(local_neg.astype(np.float64), global_neg.astype(np.float64))
+        
+        # Hierarchical classification
+        n = len(data)
+        pure_local_pos = np.zeros(n, dtype=np.float64)
+        pure_local_neg = np.zeros(n, dtype=np.float64)
+        pure_global_pos = np.zeros(n, dtype=np.float64)
+        pure_global_neg = np.zeros(n, dtype=np.float64)
+        mixed_pos = np.zeros(n, dtype=np.float64)
+        mixed_neg = np.zeros(n, dtype=np.float64)
 
-    local_std = calculate_local_std(data, LOCAL_WINDOW_SIZE)
-    score = np.abs(diff) / (local_std + 1e-8)
-    local_threshold = np.percentile(score, LOCAL_JUMP_PERCENTILE)
-    local_jump_detect = (score > local_threshold).astype(int)
+        for i in range(n):
+            # Positive structural changes
+            if local_pos[i] and global_pos[i]:
+                mixed_pos[i] = 1.0
+            elif local_pos[i] and not global_pos[i]:
+                pure_local_pos[i] = 1.0
+            elif not local_pos[i] and global_pos[i]:
+                pure_global_pos[i] = 1.0
 
-    rho_t = calculate_rho_t(data, WINDOW_SIZE)
-    time_trend = np.arange(len(data))
+            # Negative structural changes
+            if local_neg[i] and global_neg[i]:
+                mixed_neg[i] = 1.0
+            elif local_neg[i] and not global_neg[i]:
+                pure_local_neg[i] = 1.0
+            elif not local_neg[i] and global_neg[i]:
+                pure_global_neg[i] = 1.0
 
-    return delta_pos, delta_neg, rho_t, time_trend, local_jump_detect
+        # Basic features
+        rho_t = calculate_rho_t(data, config.window)
+        time_trend = np.arange(len(data))
+        
+        # Local jump detection for compatibility
+        local_std = calculate_local_std(data, config.local_window)
+        diff, _ = calculate_diff_and_threshold(data, config.delta_percentile)
+        score = np.abs(diff) / (local_std + 1e-8)
+        local_threshold = np.percentile(score, config.local_jump_percentile)
+        local_jump_detect = (score > local_threshold).astype(int)
+
+        return {
+            'data': data,
+            'delta_LambdaC_pos': combined_pos,
+            'delta_LambdaC_neg': combined_neg,
+            'rho_T': rho_t,
+            'time_trend': time_trend,
+            'local_jump_detect': local_jump_detect,
+            # Hierarchical features
+            'local_pos': local_pos.astype(np.float64),
+            'local_neg': local_neg.astype(np.float64),
+            'global_pos': global_pos.astype(np.float64),
+            'global_neg': global_neg.astype(np.float64),
+            'pure_local_pos': pure_local_pos,
+            'pure_local_neg': pure_local_neg,
+            'pure_global_pos': pure_global_pos,
+            'pure_global_neg': pure_global_neg,
+            'mixed_pos': mixed_pos,
+            'mixed_neg': mixed_neg
+        }
+    else:
+        # Basic non-hierarchical extraction (backwards compatibility)
+        diff, threshold = calculate_diff_and_threshold(data, config.delta_percentile)
+        delta_pos, delta_neg = detect_jumps(diff, threshold)
+
+        local_std = calculate_local_std(data, config.local_window)
+        score = np.abs(diff) / (local_std + 1e-8)
+        local_threshold = np.percentile(score, config.local_jump_percentile)
+        local_jump_detect = (score > local_threshold).astype(int)
+
+        rho_t = calculate_rho_t(data, config.window)
+        time_trend = np.arange(len(data))
+
+        return {
+            'data': data,
+            'delta_LambdaC_pos': delta_pos.astype(np.float64),
+            'delta_LambdaC_neg': delta_neg.astype(np.float64),
+            'rho_T': rho_t,
+            'time_trend': time_trend,
+            'local_jump_detect': local_jump_detect
+        }
 
 # ===============================
 # SECTION 3: BAYESIAN MODELING
@@ -412,14 +483,9 @@ def fit_l3_pairwise_bayesian_system(
     series_pair: Tuple[str, str] = None
 ):
     """
-    Lambda³ペアワイズシステムのベイズ推定
-
-    二つの系列間の構造テンソル相互作用を同時にモデル化
-    - 各系列の自己構造ダイナミクス
-    - 非対称相互作用効果
-    - 時間遅延効果
+    Lambda³ pairwise system Bayesian estimation
+    Models structural tensor interactions between two series
     """
-
     if series_pair is None:
         series_names = list(data_dict.keys())[:2]
     else:
@@ -433,32 +499,32 @@ def fit_l3_pairwise_bayesian_system(
     feats_b = features_dict[name_b]
 
     with pm.Model() as model:
-        # === 系列A独立項 ===
+        # Series A independent terms
         beta_0_a = pm.Normal('beta_0_a', mu=0, sigma=2)
         beta_time_a = pm.Normal('beta_time_a', mu=0, sigma=1)
         beta_dLC_pos_a = pm.Normal('beta_dLC_pos_a', mu=0, sigma=3)
         beta_dLC_neg_a = pm.Normal('beta_dLC_neg_a', mu=0, sigma=3)
         beta_rhoT_a = pm.Normal('beta_rhoT_a', mu=0, sigma=2)
 
-        # === 系列B独立項 ===
+        # Series B independent terms
         beta_0_b = pm.Normal('beta_0_b', mu=0, sigma=2)
         beta_time_b = pm.Normal('beta_time_b', mu=0, sigma=1)
         beta_dLC_pos_b = pm.Normal('beta_dLC_pos_b', mu=0, sigma=3)
         beta_dLC_neg_b = pm.Normal('beta_dLC_neg_b', mu=0, sigma=3)
         beta_rhoT_b = pm.Normal('beta_rhoT_b', mu=0, sigma=2)
 
-        # === 相互作用項 ===
-        # A → B 影響
+        # Interaction terms
+        # A → B influence
         beta_interact_ab_pos = pm.Normal('beta_interact_ab_pos', mu=0, sigma=2)
         beta_interact_ab_neg = pm.Normal('beta_interact_ab_neg', mu=0, sigma=2)
         beta_interact_ab_stress = pm.Normal('beta_interact_ab_stress', mu=0, sigma=1.5)
 
-        # B → A 影響
+        # B → A influence
         beta_interact_ba_pos = pm.Normal('beta_interact_ba_pos', mu=0, sigma=2)
         beta_interact_ba_neg = pm.Normal('beta_interact_ba_neg', mu=0, sigma=2)
         beta_interact_ba_stress = pm.Normal('beta_interact_ba_stress', mu=0, sigma=1.5)
 
-        # === 時間遅延項 ===
+        # Time lag terms
         if len(data_a) > 1:
             lag_data_a = np.concatenate([[0], data_a[:-1]])
             lag_data_b = np.concatenate([[0], data_b[:-1]])
@@ -471,54 +537,113 @@ def fit_l3_pairwise_bayesian_system(
             beta_lag_ab = 0
             beta_lag_ba = 0
 
-        # === 系列Aの平均モデル ===
+        # Mean model for series A
         mu_a = (
             beta_0_a
             + beta_time_a * feats_a['time_trend']
             + beta_dLC_pos_a * feats_a['delta_LambdaC_pos']
             + beta_dLC_neg_a * feats_a['delta_LambdaC_neg']
             + beta_rhoT_a * feats_a['rho_T']
-            # B → A 相互作用
+            # B → A interaction
             + beta_interact_ba_pos * feats_b['delta_LambdaC_pos']
             + beta_interact_ba_neg * feats_b['delta_LambdaC_neg']
             + beta_interact_ba_stress * feats_b['rho_T']
-            # 遅延効果
+            # Lag effect
             + beta_lag_ba * lag_data_b
         )
 
-        # === 系列Bの平均モデル ===
+        # Mean model for series B
         mu_b = (
             beta_0_b
             + beta_time_b * feats_b['time_trend']
             + beta_dLC_pos_b * feats_b['delta_LambdaC_pos']
             + beta_dLC_neg_b * feats_b['delta_LambdaC_neg']
             + beta_rhoT_b * feats_b['rho_T']
-            # A → B 相互作用
+            # A → B interaction
             + beta_interact_ab_pos * feats_a['delta_LambdaC_pos']
             + beta_interact_ab_neg * feats_a['delta_LambdaC_neg']
             + beta_interact_ab_stress * feats_a['rho_T']
-            # 遅延効果
+            # Lag effect
             + beta_lag_ab * lag_data_a
         )
 
-        # === 観測モデル ===
+        # Observation model
         sigma_a = pm.HalfNormal('sigma_a', sigma=1)
         sigma_b = pm.HalfNormal('sigma_b', sigma=1)
 
-        # 相関構造
+        # Correlation structure
         rho_ab = pm.Uniform('rho_ab', lower=-1, upper=1)
         cov_matrix = pm.math.stack([
             [sigma_a**2, rho_ab * sigma_a * sigma_b],
             [rho_ab * sigma_a * sigma_b, sigma_b**2]
         ])
 
-        # 同時観測
+        # Joint observation
         y_combined = pm.math.stack([data_a, data_b]).T
         mu_combined = pm.math.stack([mu_a, mu_b]).T
 
         y_obs = pm.MvNormal('y_obs', mu=mu_combined, cov=cov_matrix, observed=y_combined)
 
-        # サンプリング
+        # Sampling
+        trace = pm.sample(
+            draws=config.draws,
+            tune=config.tune,
+            target_accept=config.target_accept,
+            return_inferencedata=True,
+            cores=4,
+            chains=4
+        )
+
+    return trace, model
+
+def fit_hierarchical_bayesian(
+    data: np.ndarray,
+    hierarchical_features: Dict[str, np.ndarray],
+    config
+) -> Tuple[any, any]:
+    """
+    Hierarchical Bayesian model for short-term/long-term structural changes
+    Lambda³ theory: Efficient modeling of structural tensor hierarchy
+    """
+    with pm.Model() as model:
+        # Basic terms
+        beta_0 = pm.Normal('beta_0', mu=0, sigma=2)
+        beta_time = pm.Normal('beta_time', mu=0, sigma=1)
+
+        # Basic structural change terms
+        beta_pos = pm.Normal('beta_pos', mu=0, sigma=3)
+        beta_neg = pm.Normal('beta_neg', mu=0, sigma=3)
+        beta_rho = pm.Normal('beta_rho', mu=0, sigma=2)
+
+        # Hierarchical effect coefficients
+        alpha_local = pm.Normal('alpha_local', mu=0, sigma=1.5)
+        alpha_global = pm.Normal('alpha_global', mu=0, sigma=2)
+
+        # Hierarchical transition coefficients
+        beta_escalation = pm.Normal('beta_escalation', mu=0, sigma=1)
+        beta_deescalation = pm.Normal('beta_deescalation', mu=0, sigma=1)
+
+        # Mean structural tensor model
+        mu = (
+            beta_0
+            + beta_time * hierarchical_features['time_trend']
+            # Basic structural changes
+            + beta_pos * hierarchical_features['delta_LambdaC_pos']
+            + beta_neg * hierarchical_features['delta_LambdaC_neg']
+            + beta_rho * hierarchical_features['rho_T']
+            # Hierarchical effects
+            + alpha_local * hierarchical_features.get('local_rho_T', 0)
+            + alpha_global * hierarchical_features.get('global_rho_T', 0)
+            # Hierarchical transitions
+            + beta_escalation * hierarchical_features.get('escalation_indicator', 0)
+            + beta_deescalation * hierarchical_features.get('deescalation_indicator', 0)
+        )
+
+        # Observation model
+        sigma_obs = pm.HalfNormal('sigma_obs', sigma=1)
+        y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma_obs, observed=data)
+
+        # Bayesian estimation
         trace = pm.sample(
             draws=config.draws,
             tune=config.tune,
@@ -567,10 +692,6 @@ class Lambda3RegimeDetector:
     def label_regimes(self):
         """Assign descriptive labels to each regime."""
         return {r: f"Regime-{r+1}" for r in range(self.n_regimes)}
-
-# ===============================
-# SECTION 4.5: Finance REGIME
-# ===============================
 
 class Lambda3FinancialRegimeDetector(Lambda3RegimeDetector):
     """Financial market regime detector with Bull/Bear/Crisis classification."""
@@ -694,7 +815,460 @@ class Lambda3FinancialRegimeDetector(Lambda3RegimeDetector):
         return labels
 
 # ===============================
-# SECTION 5: SYNCHRONIZATION ANALYSIS
+# SECTION 5: INTERACTION ANALYSIS
+# ===============================
+
+def extract_interaction_coefficients(
+    trace,
+    series_names: List[str]
+) -> Dict[str, Dict[str, float]]:
+    """
+    Extract structural tensor interaction coefficients from Bayesian estimation
+    Unified function replacing both extract_interaction_structure and extract_interaction_coefficients
+    """
+    summary = az.summary(trace)
+    name_a, name_b = series_names[:2]
+    
+    # Parameter name mapping
+    param_map = {
+        'self': {
+            name_a: ('a', ['pos', 'neg', 'rhoT']),
+            name_b: ('b', ['pos', 'neg', 'rhoT'])
+        },
+        'cross': {
+            f'{name_a}_to_{name_b}': ('ab', ['pos', 'neg', 'stress']),
+            f'{name_b}_to_{name_a}': ('ba', ['pos', 'neg', 'stress'])
+        }
+    }
+    
+    results = {'self_effects': {}, 'cross_effects': {}, 'lag_effects': {}}
+    
+    # Extract self effects
+    for series, (suffix, types) in param_map['self'].items():
+        results['self_effects'][series] = {
+            'pos_jump': _safe_extract(summary, f'beta_dLC_pos_{suffix}'),
+            'neg_jump': _safe_extract(summary, f'beta_dLC_neg_{suffix}'),
+            'tension': _safe_extract(summary, f'beta_rhoT_{suffix}')
+        }
+    
+    # Extract cross effects
+    for direction, (suffix, types) in param_map['cross'].items():
+        results['cross_effects'][direction] = {
+            'pos_jump': _safe_extract(summary, f'beta_interact_{suffix}_pos'),
+            'neg_jump': _safe_extract(summary, f'beta_interact_{suffix}_neg'),
+            'tension': _safe_extract(summary, f'beta_interact_{suffix}_stress')
+        }
+    
+    # Lag effects
+    results['lag_effects'] = {
+        f'{name_a}_to_{name_b}': _safe_extract(summary, 'beta_lag_ab'),
+        f'{name_b}_to_{name_a}': _safe_extract(summary, 'beta_lag_ba')
+    }
+    
+    # Correlation
+    results['correlation'] = _safe_extract(summary, 'rho_ab')
+    
+    return results
+
+def predict_with_interactions(
+    trace,
+    features_dict: Dict[str, Dict[str, np.ndarray]],
+    series_names: List[str]
+) -> Dict[str, np.ndarray]:
+    """
+    Unified prediction function for structural tensor evolution
+    Replaces both predict_with_interactions and predict_structural_evolution
+    """
+    summary = az.summary(trace)
+    predictions = {}
+    
+    for idx, name in enumerate(series_names[:2]):
+        other_idx = 1 - idx
+        other_name = series_names[other_idx]
+        suffix = 'a' if idx == 0 else 'b'
+        other_suffix = 'b' if idx == 0 else 'a'
+        
+        # Extract parameters
+        params = {
+            'intercept': _safe_extract(summary, f'beta_0_{suffix}'),
+            'time': _safe_extract(summary, f'beta_time_{suffix}'),
+            'self_pos': _safe_extract(summary, f'beta_dLC_pos_{suffix}'),
+            'self_neg': _safe_extract(summary, f'beta_dLC_neg_{suffix}'),
+            'self_tension': _safe_extract(summary, f'beta_rhoT_{suffix}'),
+            'cross_pos': _safe_extract(summary, f'beta_interact_{other_suffix}{suffix}_pos'),
+            'cross_neg': _safe_extract(summary, f'beta_interact_{other_suffix}{suffix}_neg'),
+            'cross_tension': _safe_extract(summary, f'beta_interact_{other_suffix}{suffix}_stress')
+        }
+        
+        # Calculate prediction
+        predictions[name] = (
+            params['intercept']
+            + params['time'] * features_dict[name]['time_trend']
+            + params['self_pos'] * features_dict[name]['delta_LambdaC_pos']
+            + params['self_neg'] * features_dict[name]['delta_LambdaC_neg']
+            + params['self_tension'] * features_dict[name]['rho_T']
+            + params['cross_pos'] * features_dict[other_name]['delta_LambdaC_pos']
+            + params['cross_neg'] * features_dict[other_name]['delta_LambdaC_neg']
+            + params['cross_tension'] * features_dict[other_name]['rho_T']
+        )
+    
+    return predictions
+
+def _safe_extract(summary: pd.DataFrame, param_name: str, default: float = 0.0) -> float:
+    """Safe parameter extraction from summary"""
+    return summary.loc[param_name, 'mean'] if param_name in summary.index else default
+
+# ===============================
+# SECTION 6: CAUSALITY ANALYSIS
+# ===============================
+
+def detect_basic_structural_causality(
+    features_dict: Dict[str, Dict[str, np.ndarray]],
+    series_names: List[str],
+    lag_window: int = 5
+) -> Dict[str, Dict[int, float]]:
+    """
+    Unified structural tensor causality detection
+    Lambda³ theory: ΔΛC(t) → ΔΛC(t+k) causal pattern analysis
+    """
+    if len(series_names) < 2:
+        return {}
+
+    name_a, name_b = series_names[:2]
+    
+    # Get structural change events
+    events = {
+        name_a: {
+            'pos': features_dict[name_a]['delta_LambdaC_pos'],
+            'neg': features_dict[name_a]['delta_LambdaC_neg']
+        },
+        name_b: {
+            'pos': features_dict[name_b]['delta_LambdaC_pos'],
+            'neg': features_dict[name_b]['delta_LambdaC_neg']
+        }
+    }
+    
+    causality_patterns = {}
+    
+    # Calculate all causal patterns efficiently
+    for from_name, to_name in [(name_a, name_b), (name_b, name_a)]:
+        for from_type in ['pos', 'neg']:
+            for to_type in ['pos', 'neg']:
+                pattern_key = f'{from_name}_{from_type}_to_{to_name}_{to_type}'
+                causality_patterns[pattern_key] = _compute_lagged_causality(
+                    events[from_name][from_type],
+                    events[to_name][to_type],
+                    lag_window
+                )
+    
+    return causality_patterns
+
+def _compute_lagged_causality(
+    cause_events: np.ndarray,
+    effect_events: np.ndarray,
+    lag_window: int
+) -> Dict[int, float]:
+    """Compute lagged causality probabilities"""
+    causality_by_lag = {}
+    
+    for lag in range(1, min(lag_window + 1, len(cause_events))):
+        cause_past = cause_events[:-lag]
+        effect_future = effect_events[lag:]
+        
+        joint_prob = np.mean(cause_past * effect_future)
+        cause_prob = np.mean(cause_past)
+        
+        causality_by_lag[lag] = joint_prob / (cause_prob + 1e-8)
+    
+    return causality_by_lag
+
+def analyze_comprehensive_causality(
+    features_dict: Dict[str, Dict[str, np.ndarray]],
+    series_names: List[str],
+    lag_window: int = 5,
+    verbose: bool = True
+) -> Dict[str, any]:
+    """
+    Comprehensive causality analysis with advanced metrics
+    Lambda³ theory: Complete causal structure analysis including asymmetry and decay
+    """
+    # Basic causality detection
+    basic_causality = detect_basic_structural_causality(features_dict, series_names, lag_window)
+    
+    # Build causality matrix
+    causality_matrix = _build_causality_matrix(basic_causality, series_names)
+    
+    # Analyze temporal patterns
+    temporal_patterns = _analyze_temporal_causality_patterns(basic_causality, lag_window)
+    
+    # Compute directional strengths
+    directional_strengths = {}
+    all_causalities = []
+    
+    for direction, pattern in basic_causality.items():
+        if pattern:
+            max_causality = max(pattern.values())
+            mean_causality = np.mean(list(pattern.values()))
+            optimal_lag = max(pattern, key=pattern.get)
+            
+            directional_strengths[direction] = {
+                'max': max_causality,
+                'mean': mean_causality,
+                'optimal_lag': optimal_lag
+            }
+            all_causalities.extend(pattern.values())
+    
+    # Compute structural causality metrics
+    structural_metrics = _compute_structural_causality_metrics(
+        features_dict, series_names, basic_causality
+    )
+    
+    # Compute summary statistics
+    causality_summary = _compute_causality_summary(
+        all_causalities, directional_strengths, basic_causality
+    )
+    
+    # Display results if verbose
+    if verbose:
+        _display_causality_results(causality_summary, directional_strengths, structural_metrics)
+    
+    return {
+        'basic_causality': basic_causality,
+        'causality_matrix': causality_matrix,
+        'temporal_patterns': temporal_patterns,
+        'directional_strengths': directional_strengths,
+        'structural_metrics': structural_metrics,
+        'summary': causality_summary
+    }
+
+def _build_causality_matrix(
+    basic_causality: Dict[str, Dict[int, float]],
+    series_names: List[str]
+) -> np.ndarray:
+    """Build causality matrix"""
+    n_series = len(series_names)
+    causality_matrix = np.zeros((n_series, n_series))
+
+    for i, series_a in enumerate(series_names):
+        for j, series_b in enumerate(series_names):
+            if i != j:
+                # Search for A → B causality
+                for direction, pattern in basic_causality.items():
+                    if (series_a in direction and series_b in direction and
+                        direction.find(series_a) < direction.find(series_b)):
+                        if pattern:
+                            causality_matrix[i, j] = max(pattern.values())
+                        break
+
+    return causality_matrix
+
+def _analyze_temporal_causality_patterns(
+    basic_causality: Dict[str, Dict[int, float]],
+    lag_window: int
+) -> Dict[str, any]:
+    """Analyze time-dependent causality patterns"""
+    temporal_patterns = {
+        'lag_distribution': {},
+        'causality_decay': {},
+        'peak_causality_lags': {}
+    }
+
+    for direction, pattern in basic_causality.items():
+        if pattern and isinstance(pattern, dict):
+            lags = list(pattern.keys())
+            causalities = list(pattern.values())
+
+            # Lag distribution
+            temporal_patterns['lag_distribution'][direction] = {
+                'lags': lags,
+                'causalities': causalities
+            }
+
+            # Peak causality lag
+            peak_lag = max(pattern, key=pattern.get)
+            temporal_patterns['peak_causality_lags'][direction] = {
+                'lag': peak_lag,
+                'causality': pattern[peak_lag]
+            }
+
+            # Causality decay pattern
+            if len(causalities) > 1:
+                decay_rate = _compute_causality_decay_rate(lags, causalities)
+                temporal_patterns['causality_decay'][direction] = decay_rate
+
+    return temporal_patterns
+
+def _compute_causality_decay_rate(lags: List[int], causalities: List[float]) -> float:
+    """Compute causality decay rate"""
+    if len(causalities) < 2:
+        return 0.0
+
+    # Linear regression for decay rate estimation
+    try:
+        slope = np.polyfit(lags, causalities, 1)[0]
+        return abs(slope)  # Decay rate as absolute value
+    except:
+        return 0.0
+
+def _compute_causality_summary(
+    all_causalities: List[float],
+    directional_strengths: Dict[str, Dict],
+    basic_causality: Dict[str, Dict[int, float]]
+) -> Dict[str, any]:
+    """Compute causality summary statistics"""
+
+    # Identify strongest causality
+    strongest_strength = 0.0
+    strongest_direction = ""
+    strongest_lag = 0
+
+    for direction, strength_info in directional_strengths.items():
+        if strength_info['max'] > strongest_strength:
+            strongest_strength = strength_info['max']
+            strongest_direction = direction
+            strongest_lag = strength_info['optimal_lag']
+
+    # Asymmetry metrics
+    asymmetry_metrics = _compute_causality_asymmetry(directional_strengths)
+
+    causality_summary = {
+        'max_causality': max(all_causalities) if all_causalities else 0.0,
+        'mean_causality': np.mean(all_causalities) if all_causalities else 0.0,
+        'std_causality': np.std(all_causalities) if all_causalities else 0.0,
+        'total_causality_patterns': len(basic_causality),
+        'active_patterns': len([d for d, p in basic_causality.items() if p]),
+        'strongest_direction': strongest_direction,
+        'strongest_strength': strongest_strength,
+        'strongest_lag': strongest_lag,
+        'asymmetry_metrics': asymmetry_metrics,
+        'causality_density': len([c for c in all_causalities if c > 0.1]) / max(len(all_causalities), 1)
+    }
+
+    return causality_summary
+
+def _compute_causality_asymmetry(
+    directional_strengths: Dict[str, Dict]
+) -> Dict[str, float]:
+    """Compute causality asymmetry"""
+    asymmetry_metrics = {
+        'total_asymmetry': 0.0,
+        'max_directional_difference': 0.0,
+        'asymmetry_patterns': {}
+    }
+
+    # Calculate asymmetry for each direction pair
+    directions = list(directional_strengths.keys())
+    total_asymmetry = 0.0
+    max_diff = 0.0
+
+    for i, dir_a in enumerate(directions):
+        for j, dir_b in enumerate(directions[i+1:], i+1):
+            # Search for reverse relationships
+            if _are_reverse_directions(dir_a, dir_b):
+                strength_a = directional_strengths[dir_a]['max']
+                strength_b = directional_strengths[dir_b]['max']
+
+                asymmetry = abs(strength_a - strength_b)
+                total_asymmetry += asymmetry
+                max_diff = max(max_diff, asymmetry)
+
+                asymmetry_metrics['asymmetry_patterns'][f"{dir_a}_vs_{dir_b}"] = {
+                    'asymmetry': asymmetry,
+                    'dominant_direction': dir_a if strength_a > strength_b else dir_b
+                }
+
+    asymmetry_metrics['total_asymmetry'] = total_asymmetry
+    asymmetry_metrics['max_directional_difference'] = max_diff
+
+    return asymmetry_metrics
+
+def _are_reverse_directions(dir_a: str, dir_b: str) -> bool:
+    """Check if two directions are reverse of each other"""
+    # Simple implementation: compare series names in directions
+    parts_a = dir_a.split('_to_')
+    parts_b = dir_b.split('_to_')
+
+    if len(parts_a) == 2 and len(parts_b) == 2:
+        return (parts_a[0] == parts_b[1] and parts_a[1] == parts_b[0])
+
+    return False
+
+def _compute_structural_causality_metrics(
+    features_dict: Dict[str, Dict[str, np.ndarray]],
+    series_names: List[str],
+    basic_causality: Dict[str, Dict[int, float]]
+) -> Dict[str, any]:
+    """Compute structural tensor causality metrics"""
+
+    structural_metrics = {
+        'structural_change_causality': {},
+        'tension_causality': {},
+        'overall_structural_influence': {}
+    }
+
+    for name in series_names:
+        if name in features_dict:
+            features = features_dict[name]
+
+            # Structural change intensity
+            pos_changes = np.sum(features.get('delta_LambdaC_pos', np.array([])))
+            neg_changes = np.sum(features.get('delta_LambdaC_neg', np.array([])))
+            avg_tension = np.mean(features.get('rho_T', np.array([0])))
+
+            # Causality strength related to this series
+            related_causality = []
+            for direction, pattern in basic_causality.items():
+                if name in direction and pattern:
+                    related_causality.extend(pattern.values())
+
+            avg_causality_involvement = np.mean(related_causality) if related_causality else 0.0
+
+            structural_metrics['structural_change_causality'][name] = pos_changes + neg_changes
+            structural_metrics['tension_causality'][name] = avg_tension
+            structural_metrics['overall_structural_influence'][name] = avg_causality_involvement
+
+    return structural_metrics
+
+def _display_causality_results(
+    causality_summary: Dict[str, any],
+    directional_strengths: Dict[str, Dict],
+    structural_metrics: Dict[str, any]
+):
+    """Display causality results"""
+
+    print(f"\nIntegrated Causality Analysis Results:")
+    print(f"  Max causality strength: {causality_summary['max_causality']:.4f}")
+    print(f"  Mean causality strength: {causality_summary['mean_causality']:.4f}")
+    print(f"  Causality strength std: {causality_summary['std_causality']:.4f}")
+    print(f"  Total causality patterns: {causality_summary['total_causality_patterns']}")
+    print(f"  Active causality patterns: {causality_summary['active_patterns']}")
+    print(f"  Causality density: {causality_summary['causality_density']:.3f}")
+
+    print(f"\nStrongest Causality:")
+    print(f"  Direction: {causality_summary['strongest_direction']}")
+    print(f"  Strength: {causality_summary['strongest_strength']:.4f}")
+    print(f"  Optimal lag: {causality_summary['strongest_lag']}")
+
+    print(f"\nCausality Asymmetry:")
+    asymmetry = causality_summary['asymmetry_metrics']
+    print(f"  Total asymmetry: {asymmetry['total_asymmetry']:.4f}")
+    print(f"  Max directional difference: {asymmetry['max_directional_difference']:.4f}")
+
+    print(f"\nDirectional Causality Strength:")
+    for direction, strength in directional_strengths.items():
+        print(f"  {direction}: max={strength['max']:.4f}, "
+              f"mean={strength['mean']:.4f}, optimal_lag={strength['optimal_lag']}")
+
+    print(f"\nStructural Tensor Causality Characteristics:")
+    for series_name in structural_metrics['overall_structural_influence'].keys():
+        structural_change = structural_metrics['structural_change_causality'][series_name]
+        tension = structural_metrics['tension_causality'][series_name]
+        influence = structural_metrics['overall_structural_influence'][series_name]
+        print(f"  {series_name}: structural_change={structural_change}, "
+              f"avg_tension={tension:.3f}, causality_involvement={influence:.4f}")
+
+# ===============================
+# SECTION 7: SYNCHRONIZATION ANALYSIS
 # ===============================
 
 def calculate_sync_profile(series_a: np.ndarray, series_b: np.ndarray,
@@ -767,210 +1341,40 @@ def build_sync_network(event_series_dict: Dict[str, np.ndarray],
     return G
 
 # ===============================
-# SECTION 6: CAUSALITY ANALYSIS
+# SECTION 8: CRISIS DETECTION
 # ===============================
 
-class Lambda3BayesianExtended:
-    """Extended Lambda³ analysis with event memory and causality detection."""
-
-    def __init__(self, config: L3Config, series_names: Optional[List[str]] = None):
-        self.config = config
-        self.series_names = series_names or ['A']
-        self.event_memory = []
-        self.structure_evolution = []
-
-    def update_event_memory(self, events_dict: Dict[str, Dict[str, int]]):
-        """Update event memory with new structural changes."""
-        if len(self.event_memory) == 0:
-            self.series_names = list(events_dict.keys())
-        self.event_memory.append(events_dict)
-
-    def detect_time_dependent_causality(self, series: str = 'A', lag_window: int = LAG_WINDOW_DEFAULT) -> Dict[int, float]:
-        """Calculate time-dependent causality probabilities at different lags."""
-        causality_by_lag = {}
-
-        for lag in range(1, lag_window + 1):
-            count_pairs, count_pos = 0, 0
-
-            for i in range(len(self.event_memory) - lag):
-                if self.event_memory[i][series]['pos']:
-                    count_pos += 1
-                    if self.event_memory[i + lag][series]['neg']:
-                        count_pairs += 1
-
-            causality_by_lag[lag] = count_pairs / max(count_pos, 1)
-
-        return causality_by_lag
-
-    def detect_cross_causality(self, from_series: str, to_series: str, lag: int = 1) -> float:
-        """Detect cross-causality between different series."""
-        count_pairs, count_from = 0, 0
-
-        for i in range(len(self.event_memory) - lag):
-            if self.event_memory[i][from_series]['pos']:
-                count_from += 1
-                if self.event_memory[i + lag][to_series]['pos']:
-                    count_pairs += 1
-
-        return count_pairs / max(count_from, 1)
-
-def detect_basic_structural_causality(
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    series_names: List[str],
-    lag_window: int = 5
-) -> Dict[str, Dict[int, float]]:
-    """
-    基本的な構造変化の因果パターンを検出
-
-    ΔΛC(t) → ΔΛC(t+k) の因果関係を分析
-    複数系列対応版
-    """
-    if len(series_names) < 2:
-        print("因果分析には少なくとも2系列が必要です。")
-        return {}
-
-    # ペアワイズで分析
-    name_a, name_b = series_names[0], series_names[1]
-    print(f"基本因果分析: {name_a} ⇄ {name_b}")
-
-    # 正の構造変化イベント
-    events_a_pos = features_dict[name_a]['delta_LambdaC_pos']
-    events_b_pos = features_dict[name_b]['delta_LambdaC_pos']
-    events_a_neg = features_dict[name_a]['delta_LambdaC_neg']
-    events_b_neg = features_dict[name_b]['delta_LambdaC_neg']
-
-    causality_patterns = {}
-
-    # A → B 因果関係（正の構造変化）
-    causality_patterns[f'{name_a}_pos_to_{name_b}_pos'] = {}
-    for lag in range(1, lag_window + 1):
-        if lag < len(events_a_pos):
-            cause_events = events_a_pos[:-lag]
-            effect_events = events_b_pos[lag:]
-
-            joint_prob = np.mean(cause_events * effect_events)
-            cause_prob = np.mean(cause_events)
-
-            causality_prob = joint_prob / (cause_prob + 1e-8)
-            causality_patterns[f'{name_a}_pos_to_{name_b}_pos'][lag] = causality_prob
-
-    # A → B 因果関係（負の構造変化）
-    causality_patterns[f'{name_a}_neg_to_{name_b}_neg'] = {}
-    for lag in range(1, lag_window + 1):
-        if lag < len(events_a_neg):
-            cause_events = events_a_neg[:-lag]
-            effect_events = events_b_neg[lag:]
-
-            joint_prob = np.mean(cause_events * effect_events)
-            cause_prob = np.mean(cause_events)
-
-            causality_prob = joint_prob / (cause_prob + 1e-8)
-            causality_patterns[f'{name_a}_neg_to_{name_b}_neg'][lag] = causality_prob
-
-    # B → A 因果関係（正の構造変化）
-    causality_patterns[f'{name_b}_pos_to_{name_a}_pos'] = {}
-    for lag in range(1, lag_window + 1):
-        if lag < len(events_b_pos):
-            cause_events = events_b_pos[:-lag]
-            effect_events = events_a_pos[lag:]
-
-            joint_prob = np.mean(cause_events * effect_events)
-            cause_prob = np.mean(cause_events)
-
-            causality_prob = joint_prob / (cause_prob + 1e-8)
-            causality_patterns[f'{name_b}_pos_to_{name_a}_pos'][lag] = causality_prob
-
-    # B → A 因果関係（負の構造変化）
-    causality_patterns[f'{name_b}_neg_to_{name_a}_neg'] = {}
-    for lag in range(1, lag_window + 1):
-        if lag < len(events_b_neg):
-            cause_events = events_b_neg[:-lag]
-            effect_events = events_a_neg[lag:]
-
-            joint_prob = np.mean(cause_events * effect_events)
-            cause_prob = np.mean(cause_events)
-
-            causality_prob = joint_prob / (cause_prob + 1e-8)
-            causality_patterns[f'{name_b}_neg_to_{name_a}_neg'][lag] = causality_prob
-
-    # 非対称因果関係（正→負、負→正）
-    causality_patterns[f'{name_a}_pos_to_{name_b}_neg'] = {}
-    causality_patterns[f'{name_a}_neg_to_{name_b}_pos'] = {}
-    causality_patterns[f'{name_b}_pos_to_{name_a}_neg'] = {}
-    causality_patterns[f'{name_b}_neg_to_{name_a}_pos'] = {}
-
-    asymmetric_pairs = [
-        (events_a_pos, events_b_neg, f'{name_a}_pos_to_{name_b}_neg'),
-        (events_a_neg, events_b_pos, f'{name_a}_neg_to_{name_b}_pos'),
-        (events_b_pos, events_a_neg, f'{name_b}_pos_to_{name_a}_neg'),
-        (events_b_neg, events_a_pos, f'{name_b}_neg_to_{name_a}_pos')
-    ]
-
-    for cause_events, effect_events, pattern_name in asymmetric_pairs:
-        for lag in range(1, lag_window + 1):
-            if lag < len(cause_events):
-                cause_past = cause_events[:-lag]
-                effect_future = effect_events[lag:]
-
-                joint_prob = np.mean(cause_past * effect_future)
-                cause_prob = np.mean(cause_past)
-
-                causality_prob = joint_prob / (cause_prob + 1e-8)
-                causality_patterns[pattern_name][lag] = causality_prob
-
-    return causality_patterns
-
-# ===============================
-# SECTION 7: CRISIS DETECTION
-# ===============================
-
-def detect_financial_crises(
+def detect_structural_crisis(
     features_dict: Dict[str, Dict],
-    market_data_dict: Dict[str, np.ndarray],
-    crisis_threshold: float = 0.8
-):
-    """Detect financial crisis periods using Lambda³ features."""
-    print(f"\n{'='*50}")
-    print("FINANCIAL CRISIS DETECTION")
-    print(f"{'='*50}")
-
+    crisis_threshold: float = 0.8,
+    tension_weight: float = 0.6
+) -> Dict[str, any]:
+    """
+    Structural crisis detection
+    Lambda³ theory: Combined indicator of tension scalar (ρT) and structural changes (ΔΛC)
+    """
     crisis_indicators = {}
-
-    for asset_name, features in features_dict.items():
+    
+    # Calculate crisis score for each series
+    for name, features in features_dict.items():
+        # Normalize tension scalar
         tension = features['rho_T']
-        jumps = features['delta_LambdaC_pos'] + features['delta_LambdaC_neg']
-
-        crisis_score = (tension - np.mean(tension)) / (np.std(tension) + 1e-8)
-        jump_score = (jumps - np.mean(jumps)) / (np.std(jumps) + 1e-8)
-
-        combined_score = 0.6 * crisis_score + 0.4 * jump_score
-        crisis_indicators[asset_name] = combined_score
-
-    all_scores = np.array(list(crisis_indicators.values()))
-    aggregate_crisis = np.mean(all_scores, axis=0)
-
+        tension_score = (tension - np.mean(tension)) / (np.std(tension) + 1e-8)
+        
+        # Normalize structural changes
+        total_jumps = features['delta_LambdaC_pos'] + features['delta_LambdaC_neg']
+        jump_score = (total_jumps - np.mean(total_jumps)) / (np.std(total_jumps) + 1e-8)
+        
+        # Combined crisis score
+        crisis_indicators[name] = tension_weight * tension_score + (1 - tension_weight) * jump_score
+    
+    # Aggregate crisis score
+    aggregate_crisis = np.mean(list(crisis_indicators.values()), axis=0)
+    
+    # Identify crisis periods
     crisis_periods = aggregate_crisis > crisis_threshold
-    crisis_starts = np.where(np.diff(crisis_periods.astype(int)) == 1)[0]
-    crisis_ends = np.where(np.diff(crisis_periods.astype(int)) == -1)[0]
-
-    if crisis_periods[0]:
-        crisis_starts = np.concatenate([[0], crisis_starts])
-    if crisis_periods[-1]:
-        crisis_ends = np.concatenate([crisis_ends, [len(crisis_periods) - 1]])
-
-    crisis_episodes = []
-    for start in crisis_starts:
-        end_candidates = crisis_ends[crisis_ends > start]
-        if len(end_candidates) > 0:
-            end = end_candidates[0]
-            crisis_episodes.append((start, end))
-
-    print(f"Detected {len(crisis_episodes)} crisis episodes:")
-    for i, (start, end) in enumerate(crisis_episodes):
-        duration = end - start + 1
-        max_score = np.max(aggregate_crisis[start:end+1])
-        print(f"  Episode {i+1}: Steps {start}-{end} (Duration: {duration}, Max Score: {max_score:.2f})")
-
+    crisis_episodes = _identify_episodes(crisis_periods)
+    
     return {
         'crisis_periods': crisis_periods,
         'crisis_episodes': crisis_episodes,
@@ -978,211 +1382,38 @@ def detect_financial_crises(
         'aggregate_crisis': aggregate_crisis
     }
 
-# ===============================
-# SECTION 9: INTERACTION COEFFICIENT EXTRACTION
-# ===============================
-
-def extract_interaction_coefficients(trace, series_names: List[str]) -> Dict[str, Dict[str, float]]:
-    """
-    ベイズ推定結果から相互作用係数を抽出
-    """
-    summary = az.summary(trace)
-    name_a, name_b = series_names
-
-    results = {
-        'self_effects': {
-            name_a: {
-                'pos_jump': summary.loc['beta_dLC_pos_a', 'mean'],
-                'neg_jump': summary.loc['beta_dLC_neg_a', 'mean'],
-                'tension': summary.loc['beta_rhoT_a', 'mean']
-            },
-            name_b: {
-                'pos_jump': summary.loc['beta_dLC_pos_b', 'mean'],
-                'neg_jump': summary.loc['beta_dLC_neg_b', 'mean'],
-                'tension': summary.loc['beta_rhoT_b', 'mean']
-            }
-        },
-        'cross_effects': {
-            f'{name_a}_to_{name_b}': {
-                'pos_jump': summary.loc['beta_interact_ab_pos', 'mean'],
-                'neg_jump': summary.loc['beta_interact_ab_neg', 'mean'],
-                'tension': summary.loc['beta_interact_ab_stress', 'mean']
-            },
-            f'{name_b}_to_{name_a}': {
-                'pos_jump': summary.loc['beta_interact_ba_pos', 'mean'],
-                'neg_jump': summary.loc['beta_interact_ba_neg', 'mean'],
-                'tension': summary.loc['beta_interact_ba_stress', 'mean']
-            }
-        },
-        'lag_effects': {
-            f'{name_a}_to_{name_b}': summary.loc['beta_lag_ab', 'mean'] if 'beta_lag_ab' in summary.index else 0,
-            f'{name_b}_to_{name_a}': summary.loc['beta_lag_ba', 'mean'] if 'beta_lag_ba' in summary.index else 0
-        },
-        'correlation': summary.loc['rho_ab', 'mean'] if 'rho_ab' in summary.index else 0
-    }
-
-    return results
-
-def predict_with_interactions(
-    trace,
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    series_names: List[str],
-    n_forecast: int = 10
-) -> Dict[str, np.ndarray]:
-    """
-    相互作用を考慮した時系列予測
-    """
-    name_a, name_b = series_names
-    feats_a = features_dict[name_a]
-    feats_b = features_dict[name_b]
-
-    summary = az.summary(trace)
-
-    # 予測用のパラメータ
-    params = {
-        'beta_0_a': summary.loc['beta_0_a', 'mean'],
-        'beta_time_a': summary.loc['beta_time_a', 'mean'],
-        'beta_dLC_pos_a': summary.loc['beta_dLC_pos_a', 'mean'],
-        'beta_dLC_neg_a': summary.loc['beta_dLC_neg_a', 'mean'],
-        'beta_rhoT_a': summary.loc['beta_rhoT_a', 'mean'],
-        'beta_interact_ba_pos': summary.loc['beta_interact_ba_pos', 'mean'],
-        'beta_interact_ba_neg': summary.loc['beta_interact_ba_neg', 'mean'],
-        'beta_interact_ba_stress': summary.loc['beta_interact_ba_stress', 'mean'],
-    }
-
-    # 現在の予測
-    mu_pred_a = (
-        params['beta_0_a']
-        + params['beta_time_a'] * feats_a['time_trend']
-        + params['beta_dLC_pos_a'] * feats_a['delta_LambdaC_pos']
-        + params['beta_dLC_neg_a'] * feats_a['delta_LambdaC_neg']
-        + params['beta_rhoT_a'] * feats_a['rho_T']
-        + params['beta_interact_ba_pos'] * feats_b['delta_LambdaC_pos']
-        + params['beta_interact_ba_neg'] * feats_b['delta_LambdaC_neg']
-        + params['beta_interact_ba_stress'] * feats_b['rho_T']
-    )
-
-    # 同様に系列Bの予測も計算
-    params_b = {
-        'beta_0_b': summary.loc['beta_0_b', 'mean'],
-        'beta_time_b': summary.loc['beta_time_b', 'mean'],
-        'beta_dLC_pos_b': summary.loc['beta_dLC_pos_b', 'mean'],
-        'beta_dLC_neg_b': summary.loc['beta_dLC_neg_b', 'mean'],
-        'beta_rhoT_b': summary.loc['beta_rhoT_b', 'mean'],
-        'beta_interact_ab_pos': summary.loc['beta_interact_ab_pos', 'mean'],
-        'beta_interact_ab_neg': summary.loc['beta_interact_ab_neg', 'mean'],
-        'beta_interact_ab_stress': summary.loc['beta_interact_ab_stress', 'mean'],
-    }
-
-    mu_pred_b = (
-        params_b['beta_0_b']
-        + params_b['beta_time_b'] * feats_b['time_trend']
-        + params_b['beta_dLC_pos_b'] * feats_b['delta_LambdaC_pos']
-        + params_b['beta_dLC_neg_b'] * feats_b['delta_LambdaC_neg']
-        + params_b['beta_rhoT_b'] * feats_b['rho_T']
-        + params_b['beta_interact_ab_pos'] * feats_a['delta_LambdaC_pos']
-        + params_b['beta_interact_ab_neg'] * feats_a['delta_LambdaC_neg']
-        + params_b['beta_interact_ab_stress'] * feats_a['rho_T']
-    )
-
-    return {
-        name_a: mu_pred_a,
-        name_b: mu_pred_b
-    }
+def _identify_episodes(binary_series: np.ndarray) -> List[Tuple[int, int]]:
+    """Identify episodes of consecutive True values"""
+    diff = np.diff(np.concatenate([[False], binary_series, [False]]).astype(int))
+    starts = np.where(diff == 1)[0]
+    ends = np.where(diff == -1)[0] - 1
+    
+    return list(zip(starts, ends))
 
 # ===============================
-# SECTION 10: INTRA-SERIES HIERARCHICAL ANALYSIS
+# SECTION 9: HIERARCHICAL ANALYSIS
 # ===============================
-def calc_lambda3_features_hierarchical(data: np.ndarray, config: L3Config) -> Dict[str, np.ndarray]:
-    """
-    階層的構造変化を含むLambda³特徴量抽出（JIT関数直接使用）
-    """
-    # JIT関数で階層的構造変化を直接取得
-    local_pos, local_neg, global_pos, global_neg = detect_local_global_jumps(
-        data,
-        config.local_window,
-        getattr(config, 'global_window', 30),
-        90.0,  # local_percentile
-        95.0   # global_percentile
-    )
-
-    # 基本特徴量
-    rho_t = calculate_rho_t(data, config.window)
-    time_trend = np.arange(len(data))
-
-    # 階層的分類
-    n = len(data)
-    pure_local_pos = np.zeros(n, dtype=np.float64)
-    pure_local_neg = np.zeros(n, dtype=np.float64)
-    pure_global_pos = np.zeros(n, dtype=np.float64)
-    pure_global_neg = np.zeros(n, dtype=np.float64)
-    mixed_pos = np.zeros(n, dtype=np.float64)
-    mixed_neg = np.zeros(n, dtype=np.float64)
-
-    for i in range(n):
-        # 正の構造変化
-        if local_pos[i] and global_pos[i]:
-            mixed_pos[i] = 1.0
-        elif local_pos[i] and not global_pos[i]:
-            pure_local_pos[i] = 1.0
-        elif not local_pos[i] and global_pos[i]:
-            pure_global_pos[i] = 1.0
-
-        # 負の構造変化
-        if local_neg[i] and global_neg[i]:
-            mixed_neg[i] = 1.0
-        elif local_neg[i] and not global_neg[i]:
-            pure_local_neg[i] = 1.0
-        elif not local_neg[i] and global_neg[i]:
-            pure_global_neg[i] = 1.0
-
-    # 統合構造変化
-    combined_pos = np.maximum(local_pos.astype(np.float64), global_pos.astype(np.float64))
-    combined_neg = np.maximum(local_neg.astype(np.float64), global_neg.astype(np.float64))
-
-    # 全特徴量を統合
-    features = {
-        'data': data,
-        'delta_LambdaC_pos': combined_pos,
-        'delta_LambdaC_neg': combined_neg,
-        'rho_T': rho_t,
-        'time_trend': time_trend,
-        # 階層的特徴量
-        'local_pos': local_pos.astype(np.float64),
-        'local_neg': local_neg.astype(np.float64),
-        'global_pos': global_pos.astype(np.float64),
-        'global_neg': global_neg.astype(np.float64),
-        'pure_local_pos': pure_local_pos,
-        'pure_local_neg': pure_local_neg,
-        'pure_global_pos': pure_global_pos,
-        'pure_global_neg': pure_global_neg,
-        'mixed_pos': mixed_pos,
-        'mixed_neg': mixed_neg
-    }
-
-    return features
-
 
 def calculate_structural_hierarchy_metrics(
     structural_changes: Dict[str, np.ndarray]
 ) -> Dict[str, float]:
     """
-    構造変化の階層性メトリクス計算
+    Calculate structural change hierarchy metrics
     """
-    total_local_pos = np.sum(structural_changes['local_pos'])
-    total_local_neg = np.sum(structural_changes['local_neg'])
-    total_global_pos = np.sum(structural_changes['global_pos'])
-    total_global_neg = np.sum(structural_changes['global_neg'])
+    total_local_pos = np.sum(structural_changes.get('local_pos', 0))
+    total_local_neg = np.sum(structural_changes.get('local_neg', 0))
+    total_global_pos = np.sum(structural_changes.get('global_pos', 0))
+    total_global_neg = np.sum(structural_changes.get('global_neg', 0))
 
-    pure_local_pos = np.sum(structural_changes['pure_local_pos'])
-    pure_local_neg = np.sum(structural_changes['pure_local_neg'])
-    pure_global_pos = np.sum(structural_changes['pure_global_pos'])
-    pure_global_neg = np.sum(structural_changes['pure_global_neg'])
+    pure_local_pos = np.sum(structural_changes.get('pure_local_pos', 0))
+    pure_local_neg = np.sum(structural_changes.get('pure_local_neg', 0))
+    pure_global_pos = np.sum(structural_changes.get('pure_global_pos', 0))
+    pure_global_neg = np.sum(structural_changes.get('pure_global_neg', 0))
 
-    mixed_pos = np.sum(structural_changes['mixed_pos'])
-    mixed_neg = np.sum(structural_changes['mixed_neg'])
+    mixed_pos = np.sum(structural_changes.get('mixed_pos', 0))
+    mixed_neg = np.sum(structural_changes.get('mixed_neg', 0))
 
-    # 階層性指標
+    # Hierarchy indices
     total_events = total_local_pos + total_local_neg + total_global_pos + total_global_neg
 
     metrics = {
@@ -1197,7 +1428,6 @@ def calculate_structural_hierarchy_metrics(
 
     return metrics
 
-
 def prepare_hierarchical_features_for_bayesian(
     structural_changes: Dict[str, np.ndarray],
     original_data: np.ndarray,
@@ -1205,10 +1435,9 @@ def prepare_hierarchical_features_for_bayesian(
     verbose: bool = False
 ) -> Dict[str, np.ndarray]:
     """
-    階層的構造変化特徴量をベイズモデル用に準備
-    Lambda³理論: JITで検出された階層的構造変化を直接使用
+    Prepare hierarchical structural change features for Bayesian model
     """
-    # 既存の階層的構造変化を直接使用
+    # Use existing hierarchical structural changes directly
     local_pos = structural_changes.get('local_pos', np.zeros_like(original_data, dtype=np.float64))
     local_neg = structural_changes.get('local_neg', np.zeros_like(original_data, dtype=np.float64))
     global_pos = structural_changes.get('global_pos', np.zeros_like(original_data, dtype=np.float64))
@@ -1217,93 +1446,32 @@ def prepare_hierarchical_features_for_bayesian(
     rho_T = structural_changes.get('rho_T', calculate_rho_t(original_data, config.window))
     time_trend = structural_changes.get('time_trend', np.arange(len(original_data)))
 
-    # 統合構造変化
+    # Combined structural changes
     combined_pos = np.maximum(local_pos, global_pos)
     combined_neg = np.maximum(local_neg, global_neg)
 
-    # 階層別イベントマスク
+    # Hierarchical event masks
     local_events_mask = (local_pos + local_neg) > 0
     global_events_mask = (global_pos + global_neg) > 0
 
     if verbose:
-        print(f"  階層的構造変化: 短期={np.sum(local_events_mask)}, 長期={np.sum(global_events_mask)}")
+        print(f"  Hierarchical structural changes: Short-term={np.sum(local_events_mask)}, Long-term={np.sum(global_events_mask)}")
 
-    # ベイズモデル用特徴量
+    # Bayesian model features
     hierarchical_features = {
         'delta_LambdaC_pos': combined_pos,
         'delta_LambdaC_neg': combined_neg,
         'rho_T': rho_T,
         'time_trend': time_trend,
-        # 階層別ρT（構造変化位置でのみ非ゼロ）
+        # Hierarchical ρT (non-zero only at structural change positions)
         'local_rho_T': rho_T * local_events_mask.astype(float),
         'global_rho_T': rho_T * global_events_mask.astype(float),
-        # 階層遷移指標
+        # Hierarchy transition indicators
         'escalation_indicator': np.diff(np.concatenate([[0], global_events_mask.astype(float)])),
         'deescalation_indicator': np.diff(np.concatenate([[0], local_events_mask.astype(float)]))
     }
 
     return hierarchical_features
-
-
-def fit_fast_hierarchical_bayesian(
-    data: np.ndarray,
-    hierarchical_features: Dict[str, np.ndarray],
-    config
-) -> Tuple[any, any]:
-    """
-    階層ベイズモデル（短期・長期構造変化の分離分析）
-    Lambda³理論: 構造テンソルの階層性を効率的にモデル化
-    """
-    with pm.Model() as model:
-        # === 基本項 ===
-        beta_0 = pm.Normal('beta_0', mu=0, sigma=2)
-        beta_time = pm.Normal('beta_time', mu=0, sigma=1)
-
-        # === 基本構造変化項 ===
-        beta_pos = pm.Normal('beta_pos', mu=0, sigma=3)
-        beta_neg = pm.Normal('beta_neg', mu=0, sigma=3)
-        beta_rho = pm.Normal('beta_rho', mu=0, sigma=2)
-
-        # === 階層効果係数 ===
-        alpha_local = pm.Normal('alpha_local', mu=0, sigma=1.5)   # 短期効果
-        alpha_global = pm.Normal('alpha_global', mu=0, sigma=2)   # 長期効果
-
-        # === 階層遷移係数 ===
-        beta_escalation = pm.Normal('beta_escalation', mu=0, sigma=1)      # 短期→長期
-        beta_deescalation = pm.Normal('beta_deescalation', mu=0, sigma=1)  # 長期→短期
-
-        # === 構造テンソル平均モデル ===
-        mu = (
-            beta_0
-            + beta_time * hierarchical_features['time_trend']
-            # 基本構造変化
-            + beta_pos * hierarchical_features['delta_LambdaC_pos']
-            + beta_neg * hierarchical_features['delta_LambdaC_neg']
-            + beta_rho * hierarchical_features['rho_T']
-            # 階層効果
-            + alpha_local * hierarchical_features['local_rho_T']   # 短期効果
-            + alpha_global * hierarchical_features['global_rho_T'] # 長期効果
-            # 階層遷移効果
-            + beta_escalation * hierarchical_features['escalation_indicator']
-            + beta_deescalation * hierarchical_features['deescalation_indicator']
-        )
-
-        # === 構造テンソル観測モデル ===
-        sigma_obs = pm.HalfNormal('sigma_obs', sigma=1)
-        y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma_obs, observed=data)
-
-        # === ベイズ推定 ===
-        trace = pm.sample(
-            draws=config.draws,
-            tune=config.tune,
-            target_accept=config.target_accept,
-            return_inferencedata=True,
-            cores=4,
-            chains=4
-        )
-
-    return trace, model
-
 
 def analyze_hierarchical_separation_dynamics(
     series_name: str,
@@ -1313,48 +1481,48 @@ def analyze_hierarchical_separation_dynamics(
     verbose: bool = True
 ) -> Dict[str, any]:
     """
-    階層分離ダイナミクス分析（短期・長期構造変化の分離）
+    Hierarchical separation dynamics analysis
     """
     if verbose:
-        print(f"\n階層分離ダイナミクス解析: {series_name}")
+        print(f"\nHierarchical separation dynamics analysis: {series_name}")
 
-    # JIT検出結果を直接ベイズモデル用に準備
+    # Prepare features for Bayesian model
     hierarchical_features = prepare_hierarchical_features_for_bayesian(
         structural_changes, original_data, config, verbose=verbose
     )
 
-    # 階層イベント数の計算
+    # Calculate hierarchical event counts
     local_mask = hierarchical_features['local_rho_T'] > 0
     global_mask = hierarchical_features['global_rho_T'] > 0
 
     N_local = np.sum(local_mask)
     N_global = np.sum(global_mask)
 
-    # 十分なイベント数がなければスキップ
+    # Check for sufficient events
     MIN_EVENTS = 10
     if N_local < MIN_EVENTS or N_global < MIN_EVENTS:
         if verbose:
-            print(f"  Warning: イベント数不足 (短期: {N_local}, 長期: {N_global})")
+            print(f"  Warning: Insufficient events (short-term: {N_local}, long-term: {N_global})")
         return {}
 
-    # ベイズ推定のパラメータ調整
+    # Adjust Bayesian estimation parameters
     total_events = N_local + N_global
     if total_events < 100:
         draws, tune = 4000, 4000
     else:
         draws, tune = config.draws, config.tune
 
-    # 階層ベイズ推定実行
-    trace, model = fit_fast_hierarchical_bayesian(
+    # Execute hierarchical Bayesian estimation
+    trace, model = fit_hierarchical_bayesian(
         original_data,
         hierarchical_features,
         L3Config(draws=draws, tune=tune, target_accept=config.target_accept)
     )
 
-    # 係数抽出と結果処理
+    # Extract coefficients
     summary = az.summary(trace)
 
-    # 階層間相関の計算
+    # Calculate inter-hierarchy correlation
     hierarchy_correlation = 0.0
     if N_local > 0 and N_global > 0:
         local_values = hierarchical_features['local_rho_T'][local_mask]
@@ -1396,7 +1564,7 @@ def analyze_hierarchical_separation_dynamics(
         'hierarchy_correlation': hierarchy_correlation
     }
 
-    # 非対称性メトリクス
+    # Asymmetry metrics
     asymmetry_metrics = {
         'transition_asymmetry': abs(separation_coefficients['escalation']['coefficient']) - abs(separation_coefficients['deescalation']['coefficient']),
         'escalation_dominance': abs(separation_coefficients['escalation']['coefficient']) / (abs(separation_coefficients['escalation']['coefficient']) + abs(separation_coefficients['deescalation']['coefficient']) + 1e-8),
@@ -1404,10 +1572,10 @@ def analyze_hierarchical_separation_dynamics(
     }
 
     if verbose:
-        print(f"  階層分離係数:")
-        print(f"    エスカレーション: {separation_coefficients['escalation']['coefficient']:.4f}")
-        print(f"    デエスカレーション: {separation_coefficients['deescalation']['coefficient']:.4f}")
-        print(f"    階層間相関: {hierarchy_correlation:.4f}")
+        print(f"  Hierarchical separation coefficients:")
+        print(f"    Escalation: {separation_coefficients['escalation']['coefficient']:.4f}")
+        print(f"    De-escalation: {separation_coefficients['deescalation']['coefficient']:.4f}")
+        print(f"    Inter-hierarchy correlation: {hierarchy_correlation:.4f}")
 
     return {
         'trace': trace,
@@ -1425,6 +1593,179 @@ def analyze_hierarchical_separation_dynamics(
         'series_name': series_name
     }
 
+# ===============================
+# SECTION 10: COMPREHENSIVE ANALYSIS
+# ===============================
+
+def analyze_all_pairwise_interactions(
+    series_dict: Dict[str, np.ndarray],
+    features_dict: Dict[str, Dict[str, np.ndarray]],
+    config: L3Config,
+    max_pairs: int = None
+) -> Dict[str, any]:
+    """
+    Comprehensive pairwise interaction analysis
+    Lambda³ theory: Exhaustive structural tensor interaction analysis
+    """
+    from itertools import combinations
+    
+    series_names = list(series_dict.keys())
+    n_series = len(series_names)
+    
+    print(f"\n{'='*80}")
+    print("All Pairwise Interaction Analysis")
+    print(f"{'='*80}")
+    print(f"Number of series: {n_series}")
+    print(f"Total pairs: {n_series * (n_series - 1) // 2}")
+    
+    # Generate pair combinations
+    all_pairs = list(combinations(series_names, 2))
+    
+    # Limit pairs if specified
+    if max_pairs and len(all_pairs) > max_pairs:
+        all_pairs = all_pairs[:max_pairs]
+        print(f"Limited analysis to {max_pairs} pairs")
+    
+    print(f"Analyzing {len(all_pairs)} pairs")
+    
+    # Result storage
+    all_pairwise_results = {
+        'pairs': {},
+        'interaction_matrix': np.zeros((n_series, n_series)),
+        'asymmetry_matrix': np.zeros((n_series, n_series)),
+        'strongest_interactions': [],
+        'summary': {}
+    }
+    
+    # Analyze each pair
+    for pair_idx, (name_a, name_b) in enumerate(all_pairs):
+        print(f"\n{'─'*60}")
+        print(f"Pair {pair_idx + 1}/{len(all_pairs)}: {name_a} ⇄ {name_b}")
+        
+        try:
+            # Pairwise Bayesian estimation
+            trace, model = fit_l3_pairwise_bayesian_system(
+                {name_a: series_dict[name_a], name_b: series_dict[name_b]},
+                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
+                config,
+                series_pair=(name_a, name_b)
+            )
+            
+            # Extract interaction coefficients
+            interaction_coeffs = extract_interaction_coefficients(trace, [name_a, name_b])
+            
+            # Predictions
+            predictions = predict_with_interactions(trace, 
+                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
+                [name_a, name_b]
+            )
+            
+            # Causality inference
+            causality_patterns = detect_basic_structural_causality(
+                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
+                [name_a, name_b]
+            )
+            
+            # Save results
+            pair_key = f"{name_a}_vs_{name_b}"
+            pair_results = {
+                'trace': trace,
+                'model': model,
+                'interaction_coefficients': interaction_coeffs,
+                'predictions': predictions,
+                'causality_patterns': causality_patterns,
+                'series_names': [name_a, name_b]
+            }
+            all_pairwise_results['pairs'][pair_key] = pair_results
+            
+            # Extract interaction strengths
+            cross_effects = interaction_coeffs['cross_effects']
+            
+            # A → B total strength
+            strength_a_to_b = sum(abs(v) for v in cross_effects[f'{name_a}_to_{name_b}'].values())
+            # B → A total strength
+            strength_b_to_a = sum(abs(v) for v in cross_effects[f'{name_b}_to_{name_a}'].values())
+            
+            # Store in matrix
+            idx_a = series_names.index(name_a)
+            idx_b = series_names.index(name_b)
+            all_pairwise_results['interaction_matrix'][idx_a, idx_b] = strength_a_to_b
+            all_pairwise_results['interaction_matrix'][idx_b, idx_a] = strength_b_to_a
+            
+            # Asymmetry
+            asymmetry = abs(strength_a_to_b - strength_b_to_a)
+            all_pairwise_results['asymmetry_matrix'][idx_a, idx_b] = asymmetry
+            all_pairwise_results['asymmetry_matrix'][idx_b, idx_a] = asymmetry
+            
+            # Record strong interactions
+            total_strength = strength_a_to_b + strength_b_to_a
+            all_pairwise_results['strongest_interactions'].append({
+                'pair': pair_key,
+                'total_strength': total_strength,
+                'asymmetry': asymmetry,
+                'dominant_direction': f'{name_a}→{name_b}' if strength_a_to_b > strength_b_to_a else f'{name_b}→{name_a}',
+                'strength_a_to_b': strength_a_to_b,
+                'strength_b_to_a': strength_b_to_a
+            })
+            
+            # Display results
+            print(f"  {name_a} → {name_b}: {strength_a_to_b:.3f}")
+            print(f"  {name_b} → {name_a}: {strength_b_to_a:.3f}")
+            print(f"  Asymmetry: {asymmetry:.3f}")
+            
+        except Exception as e:
+            print(f"  Warning: Error in pair analysis: {str(e)}")
+            continue
+    
+    # Sort strongest interactions
+    all_pairwise_results['strongest_interactions'].sort(
+        key=lambda x: x['total_strength'], reverse=True
+    )
+    
+    # Summary statistics
+    interaction_values = all_pairwise_results['interaction_matrix'][
+        all_pairwise_results['interaction_matrix'] > 0
+    ]
+    asymmetry_values = all_pairwise_results['asymmetry_matrix'][
+        np.triu_indices_from(all_pairwise_results['asymmetry_matrix'], k=1)
+    ]
+    
+    all_pairwise_results['summary'] = {
+        'total_pairs_analyzed': len(all_pairwise_results['pairs']),
+        'max_interaction_strength': np.max(interaction_values) if len(interaction_values) > 0 else 0,
+        'mean_interaction_strength': np.mean(interaction_values) if len(interaction_values) > 0 else 0,
+        'max_asymmetry': np.max(asymmetry_values) if len(asymmetry_values) > 0 else 0,
+        'mean_asymmetry': np.mean(asymmetry_values) if len(asymmetry_values) > 0 else 0,
+        'strongest_pair': all_pairwise_results['strongest_interactions'][0] if all_pairwise_results['strongest_interactions'] else None
+    }
+    
+    # Display results
+    print(f"\n{'='*80}")
+    print("All Pairwise Analysis Complete")
+    print(f"{'='*80}")
+    print(f"Pairs analyzed: {all_pairwise_results['summary']['total_pairs_analyzed']}")
+    print(f"Max interaction strength: {all_pairwise_results['summary']['max_interaction_strength']:.4f}")
+    print(f"Mean interaction strength: {all_pairwise_results['summary']['mean_interaction_strength']:.4f}")
+    print(f"Max asymmetry: {all_pairwise_results['summary']['max_asymmetry']:.4f}")
+    
+    if all_pairwise_results['summary']['strongest_pair']:
+        strongest = all_pairwise_results['summary']['strongest_pair']
+        print(f"\nStrongest interaction pair: {strongest['pair']}")
+        print(f"  Total strength: {strongest['total_strength']:.4f}")
+        print(f"  Asymmetry: {strongest['asymmetry']:.4f}")
+        print(f"  Dominant direction: {strongest['dominant_direction']}")
+    
+    # Display top 5 pairs
+    print(f"\nTop 5 interaction pairs:")
+    for i, interaction in enumerate(all_pairwise_results['strongest_interactions'][:5]):
+        print(f"  {i+1}. {interaction['pair']}: "
+              f"strength={interaction['total_strength']:.3f}, "
+              f"asymmetry={interaction['asymmetry']:.3f}")
+    
+    # Visualization placeholder
+    # visualize_all_pairwise_results(all_pairwise_results, series_names)
+    
+    return all_pairwise_results
 
 def complete_hierarchical_analysis(
     data_dict: Dict[str, np.ndarray],
@@ -1435,31 +1776,11 @@ def complete_hierarchical_analysis(
     verbose: bool = True
 ) -> Dict[str, any]:
     """
-    完全な階層的構造変化分析 (Lambda³理論準拠)
-
-    Lambda³理論における構造テンソル(Λ)の階層的∆ΛC変化を検出し、
-    進行ベクトル(ΛF)および張力スカラー(ρT)の多階層相互作用を解析する。
-    時間非依存の構造空間における∆ΛCパルセーション分析。
-
-    Parameters:
-    -----------
-    data_dict : Dict[str, np.ndarray]
-        構造テンソル系列データ辞書
-    config : L3Config
-        Lambda³解析設定
-    local_window : int
-        短期構造変化検出窓幅
-    global_window : int
-        長期構造変化検出窓幅
-    series_names : List[str], optional
-        解析対象系列名リスト
-    verbose : bool
-        詳細ログ出力フラグ
-
-    Returns:
-    --------
-    Dict[str, any]
-        階層的構造変化解析結果
+    Complete hierarchical structural change analysis (Lambda³ theory compliant)
+    
+    Detects hierarchical ΔΛC changes in structural tensor (Λ) and analyzes
+    multi-scale interactions of progression vectors (ΛF) and tension scalars (ρT).
+    Time-independent structural space ΔΛC pulsation analysis.
     """
     if series_names is None:
         series_names = list(data_dict.keys())
@@ -1470,9 +1791,9 @@ def complete_hierarchical_analysis(
         print("=" * 80)
         print("LAMBDA³ HIERARCHICAL STRUCTURAL ANALYSIS")
         print("=" * 80)
-        print(f"系列数: {len(series_names)}, 窓幅: 短期={local_window}, 長期={global_window}")
+        print(f"Series count: {len(series_names)}, Windows: short-term={local_window}, long-term={global_window}")
 
-    # === STAGE 1: 各系列の階層的構造変化検出 ===
+    # STAGE 1: Hierarchical structural change detection for each series
     for name, data in data_dict.items():
         if name not in series_names:
             continue
@@ -1480,29 +1801,30 @@ def complete_hierarchical_analysis(
         if verbose:
             print(f"\n{name}: ", end="")
 
-        # JIT関数による階層的構造変化抽出
-        structural_changes = calc_lambda3_features_hierarchical(
-            data,
-            L3Config(
-                window=config.window,
-                local_window=local_window,
-                global_window=global_window
-            )
+        # Extract hierarchical structural changes using unified feature extraction
+        config_hier = L3Config(
+            window=config.window,
+            local_window=local_window,
+            global_window=global_window,
+            hierarchical=True,
+            local_threshold_percentile=config.local_threshold_percentile,
+            global_threshold_percentile=config.global_threshold_percentile
         )
+        structural_changes = calc_lambda3_features(data, config_hier)
 
-        # 階層性メトリクス計算
+        # Calculate hierarchy metrics
         hierarchy_metrics = calculate_structural_hierarchy_metrics(structural_changes)
 
         if verbose:
-            print(f"ローカル優勢度={hierarchy_metrics['local_dominance']:.2f}, "
-                  f"エスカレーション率={hierarchy_metrics['escalation_rate']:.2f}")
+            print(f"Local dominance={hierarchy_metrics['local_dominance']:.2f}, "
+                  f"Escalation rate={hierarchy_metrics['escalation_rate']:.2f}")
 
-        # === 階層分離ダイナミクス分析 ===
+        # Hierarchical separation dynamics analysis
         separation_results = analyze_hierarchical_separation_dynamics(
             name, data, structural_changes, config, verbose=verbose
         )
 
-        # 結果統合
+        # Integrate results
         results[name] = {
             'structural_changes': structural_changes,
             'hierarchy_metrics': hierarchy_metrics,
@@ -1511,23 +1833,20 @@ def complete_hierarchical_analysis(
             'series_name': name
         }
 
-        # 階層分離可視化
-        if separation_results and 'trace' in separation_results and verbose:
-            plot_hierarchical_separation_analysis(
-                separation_results,
-                structural_changes
-            )
+        # Visualization placeholder
+        # if separation_results and 'trace' in separation_results and verbose:
+        #     plot_hierarchical_separation_analysis(separation_results, structural_changes)
 
-    # === STAGE 2: ペアワイズ階層的同期分析 ===
+    # STAGE 2: Pairwise hierarchical synchronization analysis
     if len(series_names) >= 2:
         if verbose:
             print(f"\n{'=' * 80}")
-            print("ペアワイズ階層的同期分析")
+            print("Pairwise Hierarchical Synchronization Analysis")
 
         first_series = series_names[0]
         second_series = series_names[1]
 
-        # 階層的特徴量の存在確認
+        # Verify hierarchical features exist
         first_changes = results[first_series]['structural_changes']
         second_changes = results[second_series]['structural_changes']
 
@@ -1541,7 +1860,7 @@ def complete_hierarchical_analysis(
 
         if has_hierarchical_features:
             try:
-                # 基本因果関係を検出
+                # Detect basic causality
                 features_for_causality = {}
                 for name in series_names[:2]:
                     if name in results:
@@ -1564,26 +1883,26 @@ def complete_hierarchical_analysis(
                     }
                     results['hierarchical_causality'] = causality_results
                     if verbose:
-                        print(f"  階層的因果関係検出完了")
+                        print(f"  Hierarchical causality detection complete")
 
             except Exception as e:
                 if verbose:
-                    print(f"  階層的因果関係検出エラー: {e}")
+                    print(f"  Hierarchical causality detection error: {e}")
                 results['hierarchical_causality'] = {}
 
-    # === STAGE 3: 全体階層構造サマリー ===
+    # STAGE 3: Overall hierarchical structure summary
     if verbose:
         print(f"\n{'=' * 80}")
-        print("階層構造サマリー")
+        print("Hierarchical Structure Summary")
         print(f"{'=' * 80}")
 
-        # 系列別階層特性要約
+        # Series-wise hierarchy summary
         for name in series_names:
             if name in results:
                 metrics = results[name].get('hierarchy_metrics', {})
-                print(f"{name}: ローカル={metrics.get('local_dominance', 0):.2f}, "
-                      f"グローバル={metrics.get('global_dominance', 0):.2f}, "
-                      f"結合強度={metrics.get('coupling_strength', 0):.2f}")
+                print(f"{name}: Local={metrics.get('local_dominance', 0):.2f}, "
+                      f"Global={metrics.get('global_dominance', 0):.2f}, "
+                      f"Coupling={metrics.get('coupling_strength', 0):.2f}")
 
     return results
 
@@ -1596,15 +1915,14 @@ def analyze_hierarchical_synchronization(
     verbose: bool = True
 ) -> Dict[str, any]:
     """
-    階層的構造変化同期分析（簡略版）
+    Hierarchical structural change synchronization analysis (simplified)
     
-    fit_l3_pairwise_bayesian_systemを直接使用して
-    階層的同期を分析する
+    Uses fit_l3_pairwise_bayesian_system directly for hierarchical synchronization
     """
     if verbose:
-        print(f"\n階層的同期分析: {series_name_1} ⇄ {series_name_2}")
+        print(f"\nHierarchical synchronization analysis: {series_name_1} ⇄ {series_name_2}")
 
-    # データと特徴量の準備
+    # Prepare data and features
     data_dict = {
         series_name_1: structural_changes_1.get('data', np.zeros(100)),
         series_name_2: structural_changes_2.get('data', np.zeros(100))
@@ -1615,23 +1933,23 @@ def analyze_hierarchical_synchronization(
         series_name_2: structural_changes_2
     }
     
-    # デフォルト設定
+    # Default config
     if config is None:
         config = L3Config(draws=8000, tune=8000, target_accept=0.95)
 
     try:
-        # ペアワイズベイズ推定（既に非対称相互作用を含む）
+        # Pairwise Bayesian estimation
         trace, model = fit_l3_pairwise_bayesian_system(
             data_dict, features_dict, config,
             series_pair=(series_name_1, series_name_2)
         )
         
-        # 相互作用係数の抽出
+        # Extract interaction coefficients
         interaction_coeffs = extract_interaction_coefficients(
             trace, [series_name_1, series_name_2]
         )
         
-        # 同期強度計算
+        # Calculate synchronization strength
         cross_effects = interaction_coeffs['cross_effects']
         
         sync_strength_1_to_2 = sum(
@@ -1646,9 +1964,9 @@ def analyze_hierarchical_synchronization(
         total_asymmetry = abs(sync_strength_1_to_2 - sync_strength_2_to_1)
         
         if verbose:
-            print(f"  同期強度: {series_name_1}→{series_name_2}={sync_strength_1_to_2:.3f}, "
+            print(f"  Sync strength: {series_name_1}→{series_name_2}={sync_strength_1_to_2:.3f}, "
                   f"{series_name_2}→{series_name_1}={sync_strength_2_to_1:.3f}, "
-                  f"非対称性={total_asymmetry:.3f}")
+                  f"asymmetry={total_asymmetry:.3f}")
         
         return {
             'trace': trace,
@@ -1663,7 +1981,7 @@ def analyze_hierarchical_synchronization(
         
     except Exception as e:
         if verbose:
-            print(f"  階層的同期分析エラー: {e}")
+            print(f"  Hierarchical synchronization analysis error: {e}")
         return {
             'error': str(e),
             'sync_strength_1_to_2': 0.0,
@@ -1672,181 +1990,6 @@ def analyze_hierarchical_synchronization(
             'series_names': [series_name_1, series_name_2]
         }
 
-# ===============================
-# SECTION 11: ASYMMETRIC PAIRWISE ANALYSIS
-# ===============================
-def analyze_all_pairwise_interactions(
-    series_dict: Dict[str, np.ndarray],
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    config: L3Config,
-    max_pairs: int = None
-) -> Dict[str, any]:
-    """
-    全系列間のペアワイズ相互作用分析（簡潔版）
-    Lambda³理論: 構造テンソル相互作用の網羅的解析
-    
-    fit_l3_pairwise_bayesian_systemが既に非対称相互作用を
-    モデル化しているため、これを直接使用
-    """
-    from itertools import combinations
-    
-    series_names = list(series_dict.keys())
-    n_series = len(series_names)
-    
-    print(f"\n{'='*80}")
-    print("全系列ペアワイズ相互作用分析")
-    print(f"{'='*80}")
-    print(f"系列数: {n_series}")
-    print(f"総ペア数: {n_series * (n_series - 1) // 2}")
-    
-    # ペアの組み合わせを生成
-    all_pairs = list(combinations(series_names, 2))
-    
-    # max_pairsが指定されている場合は制限
-    if max_pairs and len(all_pairs) > max_pairs:
-        all_pairs = all_pairs[:max_pairs]
-        print(f"分析ペア数を{max_pairs}に制限しました")
-    
-    print(f"分析予定ペア数: {len(all_pairs)}")
-    
-    # 結果格納
-    all_pairwise_results = {
-        'pairs': {},
-        'interaction_matrix': np.zeros((n_series, n_series)),
-        'asymmetry_matrix': np.zeros((n_series, n_series)),
-        'strongest_interactions': [],
-        'summary': {}
-    }
-    
-    # 各ペアの分析
-    for pair_idx, (name_a, name_b) in enumerate(all_pairs):
-        print(f"\n{'─'*60}")
-        print(f"ペア {pair_idx + 1}/{len(all_pairs)}: {name_a} ⇄ {name_b}")
-        
-        try:
-            # ペアワイズベイズ推定（既に非対称相互作用を含む）
-            trace, model = fit_l3_pairwise_bayesian_system(
-                {name_a: series_dict[name_a], name_b: series_dict[name_b]},
-                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
-                config,
-                series_pair=(name_a, name_b)
-            )
-            
-            # 相互作用係数の抽出
-            interaction_coeffs = extract_interaction_coefficients(trace, [name_a, name_b])
-            
-            # 予測
-            predictions = predict_with_interactions(trace, 
-                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
-                [name_a, name_b]
-            )
-            
-            # 因果推論
-            causality_patterns = detect_basic_structural_causality(
-                {name_a: features_dict[name_a], name_b: features_dict[name_b]},
-                [name_a, name_b]
-            )
-            
-            # 結果の保存
-            pair_key = f"{name_a}_vs_{name_b}"
-            pair_results = {
-                'trace': trace,
-                'model': model,
-                'interaction_coefficients': interaction_coeffs,
-                'predictions': predictions,
-                'causality_patterns': causality_patterns,
-                'series_names': [name_a, name_b]
-            }
-            all_pairwise_results['pairs'][pair_key] = pair_results
-            
-            # 相互作用強度の抽出
-            cross_effects = interaction_coeffs['cross_effects']
-            
-            # A → B の総合強度
-            strength_a_to_b = sum(abs(v) for v in cross_effects[f'{name_a}_to_{name_b}'].values())
-            # B → A の総合強度
-            strength_b_to_a = sum(abs(v) for v in cross_effects[f'{name_b}_to_{name_a}'].values())
-            
-            # 行列に格納
-            idx_a = series_names.index(name_a)
-            idx_b = series_names.index(name_b)
-            all_pairwise_results['interaction_matrix'][idx_a, idx_b] = strength_a_to_b
-            all_pairwise_results['interaction_matrix'][idx_b, idx_a] = strength_b_to_a
-            
-            # 非対称性
-            asymmetry = abs(strength_a_to_b - strength_b_to_a)
-            all_pairwise_results['asymmetry_matrix'][idx_a, idx_b] = asymmetry
-            all_pairwise_results['asymmetry_matrix'][idx_b, idx_a] = asymmetry
-            
-            # 強い相互作用の記録
-            total_strength = strength_a_to_b + strength_b_to_a
-            all_pairwise_results['strongest_interactions'].append({
-                'pair': pair_key,
-                'total_strength': total_strength,
-                'asymmetry': asymmetry,
-                'dominant_direction': f'{name_a}→{name_b}' if strength_a_to_b > strength_b_to_a else f'{name_b}→{name_a}',
-                'strength_a_to_b': strength_a_to_b,
-                'strength_b_to_a': strength_b_to_a
-            })
-            
-            # 簡易結果表示
-            print(f"  {name_a} → {name_b}: {strength_a_to_b:.3f}")
-            print(f"  {name_b} → {name_a}: {strength_b_to_a:.3f}")
-            print(f"  非対称性: {asymmetry:.3f}")
-            
-        except Exception as e:
-            print(f"  警告: ペア分析でエラーが発生しました: {str(e)}")
-            continue
-    
-    # 最強相互作用をソート
-    all_pairwise_results['strongest_interactions'].sort(
-        key=lambda x: x['total_strength'], reverse=True
-    )
-    
-    # サマリー統計
-    interaction_values = all_pairwise_results['interaction_matrix'][
-        all_pairwise_results['interaction_matrix'] > 0
-    ]
-    asymmetry_values = all_pairwise_results['asymmetry_matrix'][
-        np.triu_indices_from(all_pairwise_results['asymmetry_matrix'], k=1)
-    ]
-    
-    all_pairwise_results['summary'] = {
-        'total_pairs_analyzed': len(all_pairwise_results['pairs']),
-        'max_interaction_strength': np.max(interaction_values) if len(interaction_values) > 0 else 0,
-        'mean_interaction_strength': np.mean(interaction_values) if len(interaction_values) > 0 else 0,
-        'max_asymmetry': np.max(asymmetry_values) if len(asymmetry_values) > 0 else 0,
-        'mean_asymmetry': np.mean(asymmetry_values) if len(asymmetry_values) > 0 else 0,
-        'strongest_pair': all_pairwise_results['strongest_interactions'][0] if all_pairwise_results['strongest_interactions'] else None
-    }
-    
-    # 結果の表示
-    print(f"\n{'='*80}")
-    print("全ペアワイズ分析完了")
-    print(f"{'='*80}")
-    print(f"分析ペア数: {all_pairwise_results['summary']['total_pairs_analyzed']}")
-    print(f"最大相互作用強度: {all_pairwise_results['summary']['max_interaction_strength']:.4f}")
-    print(f"平均相互作用強度: {all_pairwise_results['summary']['mean_interaction_strength']:.4f}")
-    print(f"最大非対称性: {all_pairwise_results['summary']['max_asymmetry']:.4f}")
-    
-    if all_pairwise_results['summary']['strongest_pair']:
-        strongest = all_pairwise_results['summary']['strongest_pair']
-        print(f"\n最強相互作用ペア: {strongest['pair']}")
-        print(f"  総合強度: {strongest['total_strength']:.4f}")
-        print(f"  非対称性: {strongest['asymmetry']:.4f}")
-        print(f"  優勢方向: {strongest['dominant_direction']}")
-    
-    # 上位5ペアの表示
-    print(f"\n相互作用強度上位5ペア:")
-    for i, interaction in enumerate(all_pairwise_results['strongest_interactions'][:5]):
-        print(f"  {i+1}. {interaction['pair']}: "
-              f"強度={interaction['total_strength']:.3f}, "
-              f"非対称性={interaction['asymmetry']:.3f}")
-    
-    # 統合可視化
-    visualize_all_pairwise_results(all_pairwise_results, series_names)
-    
-    return all_pairwise_results
 
 # ===============================
 # SECTION 16: VISUALIZATION
@@ -2235,10 +2378,6 @@ def plot_asymmetric_interaction_analysis(
     plt.tight_layout()
     plt.show()
 
-# ===============================
-# SECTION 13: INTERACTION COEFFICIENTS AND PREDICTIONS
-# ===============================
-
 def visualize_pairwise_results(
     data_dict: Dict[str, np.ndarray],
     features_dict: Dict[str, Dict[str, np.ndarray]],
@@ -2574,10 +2713,6 @@ def predict_with_interactions(
     }
 
 
-
-
-
-
 def analyze_multi_asset_regimes(
     features_dict: Dict,
     market_data_dict: Dict,
@@ -2636,9 +2771,6 @@ def analyze_multi_asset_regimes(
         'regime_sync_matrix': regime_sync_matrix
     }
 
-# ===============================
-# SECTION 14: ENHANCED VISUALIZATION FUNCTIONS
-# ===============================
 def analyze_complete_causality(
     features_dict: Dict[str, Dict[str, np.ndarray]],
     series_names: List[str],
@@ -2732,239 +2864,6 @@ def analyze_complete_causality(
                               structural_causality_metrics)
 
     return causality_results
-
-def _build_causality_matrix(
-    basic_causality: Dict[str, Dict[int, float]],
-    series_names: List[str]
-) -> np.ndarray:
-    """因果関係行列の構築"""
-    n_series = len(series_names)
-    causality_matrix = np.zeros((n_series, n_series))
-
-    for i, series_a in enumerate(series_names):
-        for j, series_b in enumerate(series_names):
-            if i != j:
-                # A → B の因果関係を検索
-                for direction, pattern in basic_causality.items():
-                    if (series_a in direction and series_b in direction and
-                        direction.find(series_a) < direction.find(series_b)):
-                        if pattern:
-                            causality_matrix[i, j] = max(pattern.values())
-                        break
-
-    return causality_matrix
-
-
-def _analyze_temporal_causality_patterns(
-    basic_causality: Dict[str, Dict[int, float]],
-    lag_window: int
-) -> Dict[str, any]:
-    """時間依存因果パターンの分析"""
-    temporal_patterns = {
-        'lag_distribution': {},
-        'causality_decay': {},
-        'peak_causality_lags': {}
-    }
-
-    for direction, pattern in basic_causality.items():
-        if pattern and isinstance(pattern, dict):
-            lags = list(pattern.keys())
-            causalities = list(pattern.values())
-
-            # 遅延分布
-            temporal_patterns['lag_distribution'][direction] = {
-                'lags': lags,
-                'causalities': causalities
-            }
-
-            # ピーク因果遅延
-            peak_lag = max(pattern, key=pattern.get)
-            temporal_patterns['peak_causality_lags'][direction] = {
-                'lag': peak_lag,
-                'causality': pattern[peak_lag]
-            }
-
-            # 因果関係減衰パターン
-            if len(causalities) > 1:
-                decay_rate = _compute_causality_decay_rate(lags, causalities)
-                temporal_patterns['causality_decay'][direction] = decay_rate
-
-    return temporal_patterns
-
-
-def _compute_causality_decay_rate(lags: List[int], causalities: List[float]) -> float:
-    """因果関係減衰率の計算"""
-    if len(causalities) < 2:
-        return 0.0
-
-    # 線形回帰による減衰率推定
-    try:
-        slope = np.polyfit(lags, causalities, 1)[0]
-        return abs(slope)  # 減衰率は絶対値
-    except:
-        return 0.0
-
-
-def _compute_causality_summary(
-    all_causalities: List[float],
-    directional_strengths: Dict[str, Dict],
-    basic_causality: Dict[str, Dict[int, float]]
-) -> Dict[str, any]:
-    """因果関係サマリー統計の計算"""
-
-    # 最強因果関係の特定
-    strongest_strength = 0.0
-    strongest_direction = ""
-    strongest_lag = 0
-
-    for direction, strength_info in directional_strengths.items():
-        if strength_info['max'] > strongest_strength:
-            strongest_strength = strength_info['max']
-            strongest_direction = direction
-            strongest_lag = strength_info['optimal_lag']
-
-    # 非対称性指標
-    asymmetry_metrics = _compute_causality_asymmetry(directional_strengths)
-
-    causality_summary = {
-        'max_causality': max(all_causalities) if all_causalities else 0.0,
-        'mean_causality': np.mean(all_causalities) if all_causalities else 0.0,
-        'std_causality': np.std(all_causalities) if all_causalities else 0.0,
-        'total_causality_patterns': len(basic_causality),
-        'active_patterns': len([d for d, p in basic_causality.items() if p]),
-        'strongest_direction': strongest_direction,
-        'strongest_strength': strongest_strength,
-        'strongest_lag': strongest_lag,
-        'asymmetry_metrics': asymmetry_metrics,
-        'causality_density': len([c for c in all_causalities if c > 0.1]) / max(len(all_causalities), 1)
-    }
-
-    return causality_summary
-
-
-def _compute_causality_asymmetry(
-    directional_strengths: Dict[str, Dict]
-) -> Dict[str, float]:
-    """因果関係非対称性の計算"""
-    asymmetry_metrics = {
-        'total_asymmetry': 0.0,
-        'max_directional_difference': 0.0,
-        'asymmetry_patterns': {}
-    }
-
-    # 各方向ペアの非対称性を計算
-    directions = list(directional_strengths.keys())
-    total_asymmetry = 0.0
-    max_diff = 0.0
-
-    for i, dir_a in enumerate(directions):
-        for j, dir_b in enumerate(directions[i+1:], i+1):
-            # 逆方向の関係を検索
-            if _are_reverse_directions(dir_a, dir_b):
-                strength_a = directional_strengths[dir_a]['max']
-                strength_b = directional_strengths[dir_b]['max']
-
-                asymmetry = abs(strength_a - strength_b)
-                total_asymmetry += asymmetry
-                max_diff = max(max_diff, asymmetry)
-
-                asymmetry_metrics['asymmetry_patterns'][f"{dir_a}_vs_{dir_b}"] = {
-                    'asymmetry': asymmetry,
-                    'dominant_direction': dir_a if strength_a > strength_b else dir_b
-                }
-
-    asymmetry_metrics['total_asymmetry'] = total_asymmetry
-    asymmetry_metrics['max_directional_difference'] = max_diff
-
-    return asymmetry_metrics
-
-
-def _are_reverse_directions(dir_a: str, dir_b: str) -> bool:
-    """2つの方向が逆方向かどうかを判定"""
-    # 簡単な実装：方向名に含まれる系列名を比較
-    parts_a = dir_a.split('_to_')
-    parts_b = dir_b.split('_to_')
-
-    if len(parts_a) == 2 and len(parts_b) == 2:
-        return (parts_a[0] == parts_b[1] and parts_a[1] == parts_b[0])
-
-    return False
-
-
-def _compute_structural_causality_metrics(
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    series_names: List[str],
-    basic_causality: Dict[str, Dict[int, float]]
-) -> Dict[str, any]:
-    """構造テンソル因果特性メトリクス"""
-
-    structural_metrics = {
-        'structural_change_causality': {},
-        'tension_causality': {},
-        'overall_structural_influence': {}
-    }
-
-    for name in series_names:
-        if name in features_dict:
-            features = features_dict[name]
-
-            # 構造変化強度
-            pos_changes = np.sum(features.get('delta_LambdaC_pos', np.array([])))
-            neg_changes = np.sum(features.get('delta_LambdaC_neg', np.array([])))
-            avg_tension = np.mean(features.get('rho_T', np.array([0])))
-
-            # この系列に関連する因果関係の強度
-            related_causality = []
-            for direction, pattern in basic_causality.items():
-                if name in direction and pattern:
-                    related_causality.extend(pattern.values())
-
-            avg_causality_involvement = np.mean(related_causality) if related_causality else 0.0
-
-            structural_metrics['structural_change_causality'][name] = pos_changes + neg_changes
-            structural_metrics['tension_causality'][name] = avg_tension
-            structural_metrics['overall_structural_influence'][name] = avg_causality_involvement
-
-    return structural_metrics
-
-
-def _display_causality_results(
-    causality_summary: Dict[str, any],
-    directional_strengths: Dict[str, Dict],
-    structural_metrics: Dict[str, any]
-):
-    """因果関係結果の表示"""
-
-    print(f"\n統合因果分析結果:")
-    print(f"  最大因果強度: {causality_summary['max_causality']:.4f}")
-    print(f"  平均因果強度: {causality_summary['mean_causality']:.4f}")
-    print(f"  因果強度標準偏差: {causality_summary['std_causality']:.4f}")
-    print(f"  総因果パターン数: {causality_summary['total_causality_patterns']}")
-    print(f"  活性因果パターン数: {causality_summary['active_patterns']}")
-    print(f"  因果密度: {causality_summary['causality_density']:.3f}")
-
-    print(f"\n最強因果関係:")
-    print(f"  方向: {causality_summary['strongest_direction']}")
-    print(f"  強度: {causality_summary['strongest_strength']:.4f}")
-    print(f"  最適遅延: {causality_summary['strongest_lag']}")
-
-    print(f"\n因果非対称性:")
-    asymmetry = causality_summary['asymmetry_metrics']
-    print(f"  総合非対称性: {asymmetry['total_asymmetry']:.4f}")
-    print(f"  最大方向差: {asymmetry['max_directional_difference']:.4f}")
-
-    print(f"\n方向別因果強度:")
-    for direction, strength in directional_strengths.items():
-        print(f"  {direction}: 最大={strength['max']:.4f}, "
-              f"平均={strength['mean']:.4f}, 最適遅延={strength['optimal_lag']}")
-
-    print(f"\n構造テンソル因果特性:")
-    for series_name in structural_metrics['overall_structural_influence'].keys():
-        structural_change = structural_metrics['structural_change_causality'][series_name]
-        tension = structural_metrics['tension_causality'][series_name]
-        influence = structural_metrics['overall_structural_influence'][series_name]
-        print(f"  {series_name}: 構造変化={structural_change}, "
-              f"平均張力={tension:.3f}, 因果関与度={influence:.4f}")
 
 
 def plot_complete_causality_analysis(
