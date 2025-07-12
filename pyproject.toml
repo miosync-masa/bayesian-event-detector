@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-    {name = "Mamichi Iizumi", email = "iizumi@miosync.com"},
+    {name = "Mamichi Iizumi", email = "m.iizumi@miosync.email"},
 ]
 keywords = ["lambda3", "bayesian", "synchronization", "jit", "financial", "time-series", "causality"]
 classifiers = [
@@ -149,15 +149,6 @@ viz = [
 all = [
     "lambda3-abc[dev,docs,jupyter,performance,lambda3_jit,financial,ml,viz]",
 ]
-
-[project.urls]
-Homepage = "https://github.com/miosync/lambda3-abc"
-Documentation = "https://lambda3-abc.readthedocs.io/"
-Repository = "https://github.com/miosync/lambda3-abc.git"
-Issues = "https://github.com/miosync/lambda3-abc/issues"
-Changelog = "https://github.com/miosync/lambda3-abc/blob/main/CHANGELOG.md"
-"Bug Tracker" = "https://github.com/miosync/lambda3-abc/issues"
-
 [project.scripts]
 lambda3-abc = "lambda3_abc.cli:main"
 l3-analyze = "lambda3_abc.analysis:main_csv_analysis"
