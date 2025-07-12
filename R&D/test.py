@@ -4,7 +4,7 @@
 # Refactored Framework for Structural Tensor Analysis
 # No time causality - structural pulsations (∆ΛC)
 #
-# Author: Mamichi Iizumi (Miosync, Inc.)
+# Author: Masamichi Iizumi (Miosync, Inc.)
 # License: MIT
 # Version: 2.0 (Refactored)
 # ==========================================================
@@ -27,6 +27,7 @@ from numba import jit, njit, prange
 from typing import Tuple, Dict, List, Optional, Any
 import pandas as pd
 from pathlib import Path
+import argparse
 from itertools import combinations
 import yfinance as yf
 from matplotlib.patches import Circle, FancyBboxPatch
@@ -2586,526 +2587,648 @@ def quick_lambda3_plot(
     plt.show()
 
 # ===============================
-# SECTION 15: MAIN ANALYSIS PIPELINES - ENHANCED
+# SECTION 12: MAIN ANALYSIS PIPELINES - REFACTORED
 # ===============================
 
-def main_lambda3_comprehensive_analysis(
-    csv_path: str = "financial_data_2022-2024.csv",
+def run_lambda3_analysis(
+    data_source: Union[str, Dict[str, np.ndarray]],
     config: L3Config = None,
-    analysis_modes: Dict[str, bool] = None
-) -> Dict[str, any]:
-    """
-    Lambda³ Comprehensive Analysis - 全機能統合パイプライン
-    構造テンソル空間における完全分析システム
-    """
-    if config is None:
-        config = L3Config()
-
-    if analysis_modes is None:
-        analysis_modes = {
-            'hierarchical_analysis': True,
-            'separation_dynamics': True,
-            'pairwise_analysis': True,
-            'asymmetric_analysis': True,
-            'regime_analysis': True,
-            'crisis_detection': True,
-            'advanced_visualization': True,
-            'multi_scale_analysis': True,
-            'coherence_analysis': True
-        }
-
-    print("="*80)
-    print("LAMBDA³ COMPREHENSIVE ANALYSIS - ULTIMATE PIPELINE")
-    print("Lambda³理論に基づく構造テンソル完全分析システム")
-    print("="*80)
-
-    # Step 1: データロード
-    print("\n=== Step 1: データロードと前処理 ===")
-    series_dict = load_csv_data(csv_path, time_column="Date")
-
-    data_length = len(next(iter(series_dict.values())))
-    config.T = data_length
-    series_names = list(series_dict.keys())
-
-    print(f"データ長: {data_length}, 系列数: {len(series_dict)}")
-    print(f"分析対象: {', '.join(series_names)}")
-
-    # Step 2: Lambda³特徴量抽出
-    print("\n=== Step 2: Lambda³特徴量抽出 ===")
-    features_dict = {}
-
-    for name, data in series_dict.items():
-        print(f"  {name}の構造テンソル特徴量を抽出中...")
-
-        if analysis_modes['hierarchical_analysis']:
-            features = calc_lambda3_features_hierarchical(data, config)
-        else:
-            feats = calc_lambda3_features_v2(data, config)
-            features = {
-                'data': data,
-                'delta_LambdaC_pos': feats[0],
-                'delta_LambdaC_neg': feats[1],
-                'rho_T': feats[2],
-                'time_trend': feats[3],
-                'local_jump': feats[4]
-            }
-
-        features_dict[name] = features
-
-        # 基本統計の表示
-        pos_events = np.sum(features['delta_LambdaC_pos'])
-        neg_events = np.sum(features['delta_LambdaC_neg'])
-        avg_tension = np.mean(features['rho_T'])
-        print(f"    ΔΛC⁺: {pos_events}, ΔΛC⁻: {neg_events}, 平均ρT: {avg_tension:.3f}")
-
-    # 結果格納
-    comprehensive_results = {
-        'series_dict': series_dict,
-        'features_dict': features_dict,
-        'config': config,
-        'series_names': series_names
-    }
-
-    # Step 3: 階層的構造変化分析
-    hierarchical_results = None
-    if analysis_modes['hierarchical_analysis']:
-        print("\n=== Step 3: 階層的構造変化分析 ===")
-        hierarchical_results = complete_hierarchical_analysis(
-            series_dict, config, series_names=series_names
-        )
-        comprehensive_results['hierarchical_results'] = hierarchical_results
-
-    # Step 5: ペアワイズ相互作用分析
-    pairwise_results = None
-    if analysis_modes['pairwise_analysis'] and len(series_names) >= 2:
-        print("\n=== Step 5: ペアワイズ相互作用分析 ===")
-
-        if analysis_modes['asymmetric_analysis']:
-            pairwise_results = complete_asymmetric_pairwise_analysis(
-                series_dict, features_dict, config, tuple(series_names[:2])
-            )
-        else:
-            pairwise_results = complete_pairwise_analysis(
-                series_dict, features_dict, config, tuple(series_names[:2])
-            )
-
-        comprehensive_results['pairwise_results'] = pairwise_results
-
-    # Step 6: 金融レジーム分析
-    regime_results = None
-    if analysis_modes['regime_analysis']:
-        print("\n=== Step 6: 金融レジーム分析 ===")
-        regime_results = analyze_multi_asset_regimes(
-            features_dict, series_dict, config, n_regimes=4
-        )
-        comprehensive_results['regime_results'] = regime_results
-
-    # Step 7: 危機検出
-    crisis_results = None
-    if analysis_modes['crisis_detection']:
-        print("\n=== Step 7: 金融危機検出 ===")
-        crisis_results = detect_financial_crises(
-            features_dict, series_dict, crisis_threshold=0.8
-        )
-        plot_crisis_detection(crisis_results, series_names)
-        comprehensive_results['crisis_results'] = crisis_results
-
-    # Step 8: 同期性ネットワーク分析
-    print("\n=== Step 8: 同期性ネットワーク分析 ===")
-    event_series_dict = {
-        name: features_dict[name]['delta_LambdaC_pos'].astype(np.float64)
-        for name in series_names
-    }
-
-    sync_mat, names = sync_matrix(event_series_dict, lag_window=10)
-
-    # 同期行列の可視化
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(sync_mat, annot=True, fmt='.3f',
-                xticklabels=names, yticklabels=names,
-                cmap="Blues", vmin=0, vmax=1, square=True)
-    plt.title("構造変化同期率行列 (σₛ)")
-    plt.tight_layout()
-    plt.show()
-
-    # 同期ネットワーク構築
-    threshold = np.percentile([sync_mat[i, j] for i in range(len(names))
-                              for j in range(len(names)) if i != j], 75)
-    G = build_sync_network(event_series_dict, sync_threshold=threshold)
-
-    if G.number_of_edges() > 0:
-        plot_sync_network(G)
-
-    comprehensive_results['sync_matrix'] = sync_mat
-    comprehensive_results['sync_network'] = G
-
-    # Step 9: 高度可視化分析
-    if analysis_modes['advanced_visualization']:
-        print("\n=== Step 9: 高度可視化分析 ===")
-
-        # 統合ダッシュボード
-        print("統合ダッシュボードを生成中...")
-        plot_comprehensive_lambda3_dashboard(comprehensive_results, series_names)
-
-    # Step 10: マルチスケール分析
-    if analysis_modes['multi_scale_analysis']:
-        print("\n=== Step 10: マルチスケール分析 ===")
-        plot_multi_scale_analysis(features_dict, series_names[:3])
-
-        # 動的相関分析
-        print("動的相関を分析中...")
-        plot_dynamic_correlation_heatmap(features_dict, series_names[:4])
-
-    # Step 11: 構造的一貫性分析
-    if analysis_modes['coherence_analysis']:
-        print("\n=== Step 11: 構造的一貫性分析 ===")
-        plot_structural_coherence_analysis(features_dict, series_names)
-
-    # Step 12: 統合因果分析
-    print("\n=== Step 12: 統合因果分析 ===")
-    causality_results = analyze_complete_causality(
-        features_dict, series_names[:2], lag_window=5,
-        include_hierarchical=analysis_modes['hierarchical_analysis']
-    )
-
-    # 因果関係の可視化
-    plot_complete_causality_analysis(causality_results, series_names[:2])
-
-    comprehensive_results['causality_results'] = causality_results
-
-    # Step 13: 統合サマリー生成
-    print(f"\n{'='*80}")
-    print("LAMBDA³ COMPREHENSIVE ANALYSIS SUMMARY")
-    print(f"{'='*80}")
-
-    # データサマリー
-    print(f"\nデータサマリー:")
-    print(f"  分析期間: {data_length}期間")
-    print(f"  分析系列: {len(series_names)}系列")
-    print(f"  分析モード: {sum(analysis_modes.values())}/{len(analysis_modes)}項目")
-
-    # 構造テンソル統計
-    print(f"\n構造テンソル統計:")
-    total_pos_events = sum(np.sum(features_dict[name]['delta_LambdaC_pos']) for name in series_names)
-    total_neg_events = sum(np.sum(features_dict[name]['delta_LambdaC_neg']) for name in series_names)
-    avg_tension = np.mean([np.mean(features_dict[name]['rho_T']) for name in series_names])
-
-    print(f"  総正構造変化: {total_pos_events}")
-    print(f"  総負構造変化: {total_neg_events}")
-    print(f"  平均張力スカラー: {avg_tension:.3f}")
-
-    # 階層的構造変化
-    if hierarchical_results:
-        print(f"\n階層的構造変化:")
-        for name in series_names[:3]:
-            if name in hierarchical_results:
-                metrics = hierarchical_results[name]['hierarchy_metrics']
-                print(f"  {name}:")
-                print(f"    ローカル優勢度: {metrics['local_dominance']:.3f}")
-                print(f"    グローバル優勢度: {metrics['global_dominance']:.3f}")
-                print(f"    エスカレーション率: {metrics['escalation_rate']:.3f}")
-
-                if 'hierarchical_separation' in hierarchical_results[name]:
-                    sep_metrics = hierarchical_results[name]['hierarchical_separation']['asymmetry_metrics']
-                    print(f"    エスカレーション優勢度: {sep_metrics['escalation_dominance']:.3f}")
-                    print(f"    デエスカレーション優勢度: {sep_metrics['deescalation_dominance']:.3f}")
-
-    # レジーム分析
-    if regime_results:
-        print(f"\n金融レジーム分析:")
-        asset_regimes = regime_results['asset_regimes']
-        for asset_name in series_names:
-            if asset_name in asset_regimes:
-                regime_info = asset_regimes[asset_name]
-                print(f"  {asset_name}:")
-                for regime_id, label in regime_info['labels'].items():
-                    stats = regime_info['detector'].regime_features[regime_id]
-                    print(f"    {label}: {stats['frequency']:.1%}")
-
-    # 危機分析
-    if crisis_results:
-        print(f"\n危機検出結果:")
-        print(f"  危機エピソード: {len(crisis_results['crisis_episodes'])}回")
-        for i, (start, end) in enumerate(crisis_results['crisis_episodes']):
-            duration = end - start + 1
-            print(f"    Episode {i+1}: ステップ{start}-{end} (継続{duration}期間)")
-
-    # 相互作用分析
-    if pairwise_results:
-        print(f"\n相互作用分析:")
-        if 'asymmetric_results' in pairwise_results:
-            interaction_coeffs = pairwise_results['asymmetric_results']['interaction_coefficients']
-            for direction, effects in interaction_coeffs.items():
-                total_effect = sum(abs(v) for v in effects.values())
-                print(f"  {direction}: 総合強度 {total_effect:.3f}")
-        elif 'interaction_coefficients' in pairwise_results:
-            cross_effects = pairwise_results['interaction_coefficients']['cross_effects']
-            for direction, effects in cross_effects.items():
-                total_effect = sum(abs(v) for v in effects.values())
-                print(f"  {direction}: 総合強度 {total_effect:.3f}")
-
-    # 同期性分析
-    print(f"\n同期性分析:")
-    max_sync = np.max(sync_mat[sync_mat < 1.0])
-    min_sync = np.min(sync_mat[sync_mat < 1.0])
-    avg_sync = np.mean(sync_mat[sync_mat < 1.0])
-
-    print(f"  最大同期率: {max_sync:.3f}")
-    print(f"  最小同期率: {min_sync:.3f}")
-    print(f"  平均同期率: {avg_sync:.3f}")
-    print(f"  同期ネットワークエッジ数: {G.number_of_edges()}")
-
-    # 因果関係分析
-    if causality_results:
-        print(f"\n因果関係分析:")
-        basic_causality = causality_results.get('basic_causality', {})
-        max_causality = 0
-        max_direction = ""
-
-        for direction, pattern in basic_causality.items():
-            if pattern:
-                max_prob = max(pattern.values())
-                if max_prob > max_causality:
-                    max_causality = max_prob
-                    max_direction = direction
-
-        if max_direction:
-            print(f"  最強因果関係: {max_direction}")
-            print(f"  最大因果確率: {max_causality:.3f}")
-
-    print(f"\n{'='*80}")
-    print("Lambda³ Comprehensive Analysis Complete!")
-    print("• 構造テンソル相互作用を完全解析")
-    print("• 階層分離ダイナミクスを高速分析")
-    print("• 非対称相互作用を詳細分析")
-    print("• 市場レジームを検出・同期化")
-    print("• 危機エピソードを特定")
-    print("• マルチスケール構造変化を解析")
-    print("• 構造的一貫性を定量化")
-    print("• 統合因果関係を解明")
-    print(f"{'='*80}")
-
-    return comprehensive_results
-
-def main_lambda3_custom_analysis(
-    csv_path: str,
+    analysis_type: str = "comprehensive",
     target_series: List[str] = None,
-    analysis_focus: str = "comprehensive",
-    config: L3Config = None
+    verbose: bool = True
 ) -> Dict[str, any]:
     """
-    カスタマイズ可能なLambda³分析パイプライン
-    特定の分析に焦点を当てた柔軟な実行
+    Lambda³統合分析エントリーポイント
+    
+    Parameters:
+    -----------
+    data_source : Union[str, Dict[str, np.ndarray]]
+        CSVファイルパスまたはデータ辞書
+    config : L3Config
+        分析設定
+    analysis_type : str
+        'comprehensive', 'hierarchical', 'pairwise', 'rapid'
+    target_series : List[str]
+        分析対象系列名（Noneの場合は全系列）
+    verbose : bool
+        詳細出力フラグ
+        
+    Returns:
+    --------
+    Dict[str, any]
+        統合分析結果
     """
     if config is None:
         config = L3Config()
-
-    # 分析フォーカスに応じた設定
-    focus_configs = {
-        "hierarchical": {
-            'hierarchical_analysis': True,
-            'separation_dynamics': True,
-            'pairwise_analysis': False,
-            'asymmetric_analysis': False,
-            'regime_analysis': False,
-            'crisis_detection': False,
-            'advanced_visualization': True,
-            'multi_scale_analysis': False,
-            'coherence_analysis': False
-        },
-        "pairwise": {
-            'hierarchical_analysis': False,
-            'separation_dynamics': False,
-            'pairwise_analysis': True,
-            'asymmetric_analysis': True,
-            'regime_analysis': False,
-            'crisis_detection': False,
-            'advanced_visualization': True,
-            'multi_scale_analysis': False,
-            'coherence_analysis': False
-        },
-        "regime": {
-            'hierarchical_analysis': False,
-            'separation_dynamics': False,
-            'pairwise_analysis': False,
-            'asymmetric_analysis': False,
-            'regime_analysis': True,
-            'crisis_detection': True,
-            'advanced_visualization': True,
-            'multi_scale_analysis': False,
-            'coherence_analysis': False
-        },
-        "comprehensive": {
-            'hierarchical_analysis': True,
-            'separation_dynamics': True,
-            'pairwise_analysis': True,
-            'asymmetric_analysis': True,
-            'regime_analysis': True,
-            'crisis_detection': True,
-            'advanced_visualization': True,
-            'multi_scale_analysis': True,
-            'coherence_analysis': True
-        }
-    }
-
-    analysis_modes = focus_configs.get(analysis_focus, focus_configs["comprehensive"])
-
-    print(f"Lambda³ Custom Analysis - Focus: {analysis_focus}")
-
+        
     # データロード
-    series_dict = load_csv_data(csv_path, time_column="Date")
-
-    # 対象系列の絞り込み
+    if isinstance(data_source, str):
+        series_dict = load_csv_data(data_source, time_column="Date")
+    else:
+        series_dict = data_source
+        
+    # 対象系列の選択
     if target_series:
-        filtered_series_dict = {name: data for name, data in series_dict.items()
-                               if name in target_series}
-        series_dict = filtered_series_dict
+        series_dict = {k: v for k, v in series_dict.items() if k in target_series}
+        
+    series_names = list(series_dict.keys())
+    
+    if verbose:
+        print("="*80)
+        print(f"Lambda³ Analysis - Type: {analysis_type}")
+        print(f"Series: {len(series_names)}, Length: {len(next(iter(series_dict.values())))}")
+        print("="*80)
+    
+    # 分析タイプに応じた実行
+    if analysis_type == "comprehensive":
+        return _run_comprehensive_analysis(series_dict, config, verbose)
+    elif analysis_type == "hierarchical":
+        return _run_hierarchical_analysis(series_dict, config, verbose)
+    elif analysis_type == "pairwise":
+        return _run_pairwise_analysis(series_dict, config, verbose)
+    elif analysis_type == "rapid":
+        return _run_rapid_analysis(series_dict, config, verbose)
+    else:
+        raise ValueError(f"Unknown analysis type: {analysis_type}")
 
-    # メイン分析実行
-    results = main_lambda3_comprehensive_analysis(
-        csv_path=csv_path,
-        config=config,
-        analysis_modes=analysis_modes
-    )
 
-    return results
-
-def main_lambda3_rapid_analysis(
-    csv_path: str,
-    max_series: int = 3,
-    rapid_config: Dict[str, int] = None
+def _run_comprehensive_analysis(
+    series_dict: Dict[str, np.ndarray],
+    config: L3Config,
+    verbose: bool = True
 ) -> Dict[str, any]:
-    """
-    高速Lambda³分析パイプライン
-    迅速な分析のための軽量版
-    """
-    if rapid_config is None:
-        rapid_config = {
-            'draws': 2000,
-            'tune': 2000,
-            'target_accept': 0.90
-        }
-
-    # 高速設定
-    config = L3Config(
-        draws=rapid_config['draws'],
-        tune=rapid_config['tune'],
-        target_accept=rapid_config['target_accept']
-    )
-
-    # 高速分析モード
-    analysis_modes = {
-        'hierarchical_analysis': True,
-        'separation_dynamics': True,  # 高速版を使用
-        'pairwise_analysis': True,
-        'asymmetric_analysis': False,  # スキップして高速化
-        'regime_analysis': True,
-        'crisis_detection': True,
-        'advanced_visualization': False,  # 基本可視化のみ
-        'multi_scale_analysis': False,
-        'coherence_analysis': False
+    """包括的Lambda³分析の実行"""
+    
+    results = {
+        'series_dict': series_dict,
+        'series_names': list(series_dict.keys()),
+        'config': config
     }
-
-    print("Lambda³ Rapid Analysis - 高速分析モード")
-    print(f"設定: draws={config.draws}, tune={config.tune}")
-
-    # データロード（系列数制限）
-    series_dict = load_csv_data(csv_path, time_column="Date")
-
-    # 系列数制限
-    if len(series_dict) > max_series:
-        limited_series = dict(list(series_dict.items())[:max_series])
-        series_dict = limited_series
-        print(f"系列数を{max_series}に制限しました")
-
-    # メイン分析実行
-    results = main_lambda3_comprehensive_analysis(
-        csv_path=csv_path,
-        config=config,
-        analysis_modes=analysis_modes
+    
+    # Stage 1: 特徴量抽出
+    if verbose:
+        print("\n[Stage 1] Lambda³ Feature Extraction")
+    
+    features_dict = {}
+    for name, data in series_dict.items():
+        features = calc_lambda3_features(data, config)
+        features_dict[name] = features
+        
+        if verbose:
+            pos_events = np.sum(features['delta_LambdaC_pos'])
+            neg_events = np.sum(features['delta_LambdaC_neg'])
+            avg_tension = np.mean(features['rho_T'])
+            print(f"  {name}: ΔΛC⁺={pos_events}, ΔΛC⁻={neg_events}, ρT={avg_tension:.3f}")
+    
+    results['features_dict'] = features_dict
+    
+    # Stage 2: 階層的分析
+    if config.hierarchical and verbose:
+        print("\n[Stage 2] Hierarchical Analysis")
+        
+    hierarchical_results = complete_hierarchical_analysis(
+        series_dict, config, verbose=verbose
     )
-
+    results['hierarchical_results'] = hierarchical_results
+    
+    # Stage 3: ペアワイズ分析
+    if len(results['series_names']) >= 2:
+        if verbose:
+            print("\n[Stage 3] Pairwise Interaction Analysis")
+            
+        pairwise_results = analyze_all_pairwise_interactions(
+            series_dict, features_dict, config, max_pairs=5
+        )
+        results['pairwise_results'] = pairwise_results
+    
+    # Stage 4: レジーム分析
+    if verbose:
+        print("\n[Stage 4] Regime Detection")
+        
+    regime_detector = Lambda3FinancialRegimeDetector(n_regimes=4)
+    regime_results = {}
+    
+    for name in results['series_names']:
+        regime_labels = regime_detector.fit(features_dict[name], series_dict[name])
+        regime_results[name] = {
+            'labels': regime_labels,
+            'regime_names': regime_detector.label_financial_regimes(),
+            'features': regime_detector.regime_features
+        }
+        
+    results['regime_results'] = regime_results
+    
+    # Stage 5: 危機検出
+    if verbose:
+        print("\n[Stage 5] Crisis Detection")
+        
+    crisis_results = detect_structural_crisis(features_dict)
+    results['crisis_results'] = crisis_results
+    
+    # Stage 6: 因果分析
+    if verbose:
+        print("\n[Stage 6] Causality Analysis")
+        
+    causality_results = analyze_comprehensive_causality(
+        features_dict, results['series_names'][:2], verbose=verbose
+    )
+    results['causality_results'] = causality_results
+    
+    # Stage 7: 同期分析
+    if verbose:
+        print("\n[Stage 7] Synchronization Analysis")
+        
+    event_series = {
+        name: features['delta_LambdaC_pos'].astype(np.float64)
+        for name, features in features_dict.items()
+    }
+    
+    sync_mat, names = sync_matrix(event_series)
+    results['sync_matrix'] = sync_mat
+    results['sync_names'] = names
+    
+    # Summary
+    if verbose:
+        _print_analysis_summary(results)
+    
     return results
+
+
+def _run_hierarchical_analysis(
+    series_dict: Dict[str, np.ndarray],
+    config: L3Config,
+    verbose: bool = True
+) -> Dict[str, any]:
+    """階層的分析特化版"""
+    
+    # 階層的分析を強制有効化
+    config.hierarchical = True
+    
+    results = {
+        'series_dict': series_dict,
+        'series_names': list(series_dict.keys()),
+        'config': config
+    }
+    
+    # 階層的特徴量抽出
+    if verbose:
+        print("\n[Hierarchical Feature Extraction]")
+        
+    features_dict = {}
+    for name, data in series_dict.items():
+        features = calc_lambda3_features(data, config)
+        features_dict[name] = features
+        
+        if verbose and 'pure_local_pos' in features:
+            local_events = np.sum(features['pure_local_pos'] + features['pure_local_neg'])
+            global_events = np.sum(features['pure_global_pos'] + features['pure_global_neg'])
+            mixed_events = np.sum(features['mixed_pos'] + features['mixed_neg'])
+            print(f"  {name}: Local={local_events}, Global={global_events}, Mixed={mixed_events}")
+    
+    results['features_dict'] = features_dict
+    
+    # 完全階層的分析
+    hierarchical_results = complete_hierarchical_analysis(
+        series_dict, config, verbose=verbose
+    )
+    results['hierarchical_results'] = hierarchical_results
+    
+    # 階層的因果分析
+    if len(results['series_names']) >= 2 and verbose:
+        print("\n[Hierarchical Causality Analysis]")
+        
+    # 簡易可視化
+    if verbose:
+        visualizer = Lambda3Visualizer()
+        fig = visualizer.plot_hierarchical_dynamics(hierarchical_results)
+        plt.show()
+    
+    return results
+
+
+def _run_pairwise_analysis(
+    series_dict: Dict[str, np.ndarray],
+    config: L3Config,
+    verbose: bool = True
+) -> Dict[str, any]:
+    """ペアワイズ分析特化版"""
+    
+    if len(series_dict) < 2:
+        raise ValueError("Pairwise analysis requires at least 2 series")
+    
+    results = {
+        'series_dict': series_dict,
+        'series_names': list(series_dict.keys()),
+        'config': config
+    }
+    
+    # 特徴量抽出
+    if verbose:
+        print("\n[Feature Extraction for Pairwise Analysis]")
+        
+    features_dict = {}
+    for name, data in series_dict.items():
+        features = calc_lambda3_features(data, config)
+        features_dict[name] = features
+    
+    results['features_dict'] = features_dict
+    
+    # 全ペアワイズ分析
+    pairwise_results = analyze_all_pairwise_interactions(
+        series_dict, features_dict, config,
+        max_pairs=None  # 全ペア分析
+    )
+    results['pairwise_results'] = pairwise_results
+    
+    # 相互作用ネットワーク可視化
+    if verbose:
+        visualizer = Lambda3Visualizer()
+        fig = visualizer.plot_interaction_network(
+            pairwise_results, results['series_names']
+        )
+        plt.show()
+    
+    return results
+
+
+def _run_rapid_analysis(
+    series_dict: Dict[str, np.ndarray],
+    config: L3Config,
+    verbose: bool = True
+) -> Dict[str, any]:
+    """高速分析版"""
+    
+    # 高速設定に変更
+    config.draws = 2000
+    config.tune = 2000
+    config.target_accept = 0.90
+    
+    # 系列数制限
+    max_series = 3
+    if len(series_dict) > max_series:
+        series_dict = dict(list(series_dict.items())[:max_series])
+        if verbose:
+            print(f"Series limited to {max_series} for rapid analysis")
+    
+    results = {
+        'series_dict': series_dict,
+        'series_names': list(series_dict.keys()),
+        'config': config
+    }
+    
+    # 基本特徴量抽出のみ
+    if verbose:
+        print("\n[Rapid Feature Extraction]")
+        
+    features_dict = {}
+    for name, data in series_dict.items():
+        # 非階層的特徴量のみ
+        config.hierarchical = False
+        features = calc_lambda3_features(data, config)
+        features_dict[name] = features
+    
+    results['features_dict'] = features_dict
+    
+    # 簡易レジーム検出
+    if verbose:
+        print("\n[Rapid Regime Detection]")
+        
+    regime_detector = Lambda3RegimeDetector(n_regimes=3)
+    regime_results = {}
+    
+    for name in results['series_names']:
+        regime_labels = regime_detector.fit(features_dict[name])
+        regime_results[name] = {
+            'labels': regime_labels,
+            'regime_names': regime_detector.label_regimes()
+        }
+    
+    results['regime_results'] = regime_results
+    
+    # 簡易危機検出
+    crisis_results = detect_structural_crisis(
+        features_dict, crisis_threshold=0.85
+    )
+    results['crisis_results'] = crisis_results
+    
+    # 簡易可視化
+    if verbose:
+        quick_lambda3_plot(features_dict, results['series_names'], 'pulsation')
+    
+    return results
+
+
+def _print_analysis_summary(results: Dict[str, any]) -> None:
+    """分析結果サマリーの表示"""
+    
+    print("\n" + "="*80)
+    print("Lambda³ Analysis Summary")
+    print("="*80)
+    
+    # 基本情報
+    print(f"\nData Summary:")
+    print(f"  Series: {len(results['series_names'])}")
+    print(f"  Length: {results['config'].T}")
+    
+    # 構造変化統計
+    if 'features_dict' in results:
+        total_pos = sum(np.sum(f['delta_LambdaC_pos']) 
+                       for f in results['features_dict'].values())
+        total_neg = sum(np.sum(f['delta_LambdaC_neg']) 
+                       for f in results['features_dict'].values())
+        avg_tension = np.mean([np.mean(f['rho_T']) 
+                              for f in results['features_dict'].values()])
+        
+        print(f"\nStructural Change Statistics:")
+        print(f"  Total ΔΛC⁺: {total_pos}")
+        print(f"  Total ΔΛC⁻: {total_neg}")
+        print(f"  Average ρT: {avg_tension:.3f}")
+    
+    # 階層的分析
+    if 'hierarchical_results' in results:
+        print(f"\nHierarchical Analysis: Complete")
+        for name in list(results['hierarchical_results'].keys())[:3]:
+            if 'hierarchy_metrics' in results['hierarchical_results'][name]:
+                metrics = results['hierarchical_results'][name]['hierarchy_metrics']
+                print(f"  {name}: Local={metrics['local_dominance']:.2f}, "
+                      f"Global={metrics['global_dominance']:.2f}")
+    
+    # ペアワイズ分析
+    if 'pairwise_results' in results:
+        print(f"\nPairwise Analysis: Complete")
+        if 'summary' in results['pairwise_results']:
+            summary = results['pairwise_results']['summary']
+            print(f"  Max interaction: {summary['max_interaction_strength']:.3f}")
+            print(f"  Max asymmetry: {summary['max_asymmetry']:.3f}")
+    
+    # レジーム分析
+    if 'regime_results' in results:
+        print(f"\nRegime Analysis: Complete")
+        for name in list(results['regime_results'].keys())[:2]:
+            regime_info = results['regime_results'][name]
+            n_regimes = len(set(regime_info['labels']))
+            print(f"  {name}: {n_regimes} regimes detected")
+    
+    # 危機検出
+    if 'crisis_results' in results:
+        n_episodes = len(results['crisis_results']['crisis_episodes'])
+        print(f"\nCrisis Detection: {n_episodes} episodes")
+    
+    # 因果分析
+    if 'causality_results' in results:
+        if 'summary' in results['causality_results']:
+            summary = results['causality_results']['summary']
+            print(f"\nCausality Analysis: Complete")
+            print(f"  Strongest: {summary['strongest_direction']}")
+            print(f"  Strength: {summary['strongest_strength']:.3f}")
+    
+    print("\n" + "="*80)
+
 
 # ===============================
-# SECTION 12: EXECUTION AND MAIN
+# Simplified Interface Functions
+# ===============================
+
+def lambda3_analyze_financial_data(
+    start_date: str = "2022-01-01",
+    end_date: str = "2024-12-31",
+    tickers: Dict[str, str] = None,
+    analysis_type: str = "comprehensive"
+) -> Dict[str, any]:
+    """
+    金融データのLambda³分析（簡易インターフェース）
+    
+    Parameters:
+    -----------
+    start_date : str
+        開始日
+    end_date : str
+        終了日
+    tickers : Dict[str, str]
+        ティッカー辞書
+    analysis_type : str
+        分析タイプ
+        
+    Returns:
+    --------
+    Dict[str, any]
+        分析結果
+    """
+    # データ取得
+    csv_filename = f"financial_data_{start_date}_{end_date}.csv"
+    data_df = fetch_financial_data(
+        start_date=start_date,
+        end_date=end_date,
+        tickers=tickers,
+        csv_filename=csv_filename,
+        verbose=True
+    )
+    
+    if data_df is None:
+        raise ValueError("Failed to fetch financial data")
+    
+    # Lambda³分析実行
+    return run_lambda3_analysis(
+        data_source=csv_filename,
+        analysis_type=analysis_type,
+        verbose=True
+    )
+
+def lambda3_batch_analysis(
+    data_files: List[str],
+    output_dir: str = "lambda3_results",
+    analysis_types: List[str] = None
+) -> Dict[str, Dict[str, any]]:
+    """
+    複数データファイルのバッチ分析
+    
+    Parameters:
+    -----------
+    data_files : List[str]
+        CSVファイルリスト
+    output_dir : str
+        結果出力ディレクトリ
+    analysis_types : List[str]
+        分析タイプリスト
+        
+    Returns:
+    --------
+    Dict[str, Dict[str, any]]
+        ファイル別分析結果
+    """
+    if analysis_types is None:
+        analysis_types = ["rapid"]
+    
+    # 出力ディレクトリ作成
+    Path(output_dir).mkdir(exist_ok=True)
+    
+    batch_results = {}
+    
+    for data_file in data_files:
+        print(f"\nProcessing: {data_file}")
+        
+        file_results = {}
+        for analysis_type in analysis_types:
+            try:
+                results = run_lambda3_analysis(
+                    data_source=data_file,
+                    analysis_type=analysis_type,
+                    verbose=False
+                )
+                file_results[analysis_type] = results
+                
+                # 結果保存
+                output_file = Path(output_dir) / f"{Path(data_file).stem}_{analysis_type}_results.pkl"
+                with open(output_file, 'wb') as f:
+                    import pickle
+                    pickle.dump(results, f)
+                    
+            except Exception as e:
+                print(f"  Error in {analysis_type} analysis: {e}")
+                file_results[analysis_type] = {"error": str(e)}
+        
+        batch_results[data_file] = file_results
+    
+    return batch_results
+
+
+def lambda3_streaming_analysis(
+    initial_data: Dict[str, np.ndarray],
+    update_callback: callable,
+    window_size: int = 100,
+    update_interval: int = 10
+) -> None:
+    """
+    ストリーミングデータのリアルタイム分析
+    
+    Parameters:
+    -----------
+    initial_data : Dict[str, np.ndarray]
+        初期データ
+    update_callback : callable
+        新データ取得コールバック
+    window_size : int
+        分析ウィンドウサイズ
+    update_interval : int
+        更新間隔
+    """
+    config = L3Config(T=window_size)
+    
+    current_data = {k: v[-window_size:] for k, v in initial_data.items()}
+    
+    iteration = 0
+    while True:
+        try:
+            # 新データ取得
+            new_data = update_callback()
+            if new_data is None:
+                break
+            
+            # データ更新
+            for name, values in new_data.items():
+                if name in current_data:
+                    current_data[name] = np.concatenate([
+                        current_data[name][len(values):],
+                        values
+                    ])
+            
+            # 定期的に分析実行
+            if iteration % update_interval == 0:
+                results = run_lambda3_analysis(
+                    data_source=current_data,
+                    config=config,
+                    analysis_type="rapid",
+                    verbose=False
+                )
+                
+                # 結果表示（簡易）
+                print(f"\n[Iteration {iteration}]")
+                if 'crisis_results' in results:
+                    crisis_score = np.mean(results['crisis_results']['aggregate_crisis'])
+                    print(f"Crisis Score: {crisis_score:.3f}")
+                
+            iteration += 1
+            
+        except KeyboardInterrupt:
+            print("\nStreaming analysis stopped")
+            break
+        except Exception as e:
+            print(f"Error in streaming: {e}")
+            continue
+
+# ===============================
+# Main Execution Example
 # ===============================
 
 if __name__ == '__main__':
-    # Lambda³設定
-    config = L3Config()
 
-    print("Lambda³ Analytics Framework - Ultimate Edition")
-    print("構造テンソル空間における完全分析システム")
+    parser = argparse.ArgumentParser(description='Lambda³ Analytics Framework')
+    parser.add_argument('--mode', type=str, default='demo',
+                       choices=['demo', 'financial', 'batch', 'custom'],
+                       help='Execution mode')
+    parser.add_argument('--data', type=str, default=None,
+                       help='Data file path')
+    parser.add_argument('--analysis', type=str, default='comprehensive',
+                       choices=['comprehensive', 'hierarchical', 'pairwise', 'rapid'],
+                       help='Analysis type')
+    parser.add_argument('--series', nargs='+', default=None,
+                       help='Target series names')
+    
+    args = parser.parse_args()
+    
+    print("Lambda³ Analytics Framework")
+    print("Structural Tensor Analysis in Semantic Space")
     print("="*60)
-
-    # 実行モード選択
-    execution_mode = "comprehensive"  # "comprehensive", "custom", "rapid"
-
-    if execution_mode == "comprehensive":
-        print("実行モード: 包括的分析 (全機能)")
-
-        # 金融データ取得
-        print("\n金融データの取得...")
-        fetch_financial_data(
-            start_date="2022-01-01",
+    
+    if args.mode == 'demo':
+        # デモ実行
+        print("\nDemo Mode: Fetching sample financial data...")
+        
+        results = lambda3_analyze_financial_data(
+            start_date="2023-01-01",
             end_date="2024-12-31",
-            csv_filename="financial_data_2022-2024.csv"
+            analysis_type=args.analysis
         )
-
-        # Lambda³包括的分析実行
-        results = main_lambda3_comprehensive_analysis(
-            csv_path="financial_data_2022-2024.csv",
-            config=config
+        
+    elif args.mode == 'financial':
+        # 金融データ分析
+        print("\nFinancial Analysis Mode")
+        
+        results = lambda3_analyze_financial_data(
+            analysis_type=args.analysis
         )
-
-    elif execution_mode == "custom":
-        print("実行モード: カスタム分析")
-
-        # カスタム分析実行例
-        results = main_lambda3_custom_analysis(
-            csv_path="financial_data_2024.csv",
-            target_series=["USD/JPY", "Nikkei 225"],
-            analysis_focus="pairwise",  # "hierarchical", "pairwise", "regime", "comprehensive"
-            config=config
+        
+    elif args.mode == 'batch':
+        # バッチ分析
+        print("\nBatch Analysis Mode")
+        
+        if args.data:
+            data_files = [args.data]
+        else:
+            # デフォルトファイルリスト
+            data_files = ["data1.csv", "data2.csv"]
+        
+        results = lambda3_batch_analysis(
+            data_files=data_files,
+            analysis_types=[args.analysis]
         )
-
-    elif execution_mode == "rapid":
-        print("実行モード: 高速分析")
-
-        # 高速分析実行
-        results = main_lambda3_rapid_analysis(
-            csv_path="financial_data_2024.csv",
-            max_series=3,
-            rapid_config={'draws': 4000, 'tune': 4000, 'target_accept': 0.95}
+        
+    elif args.mode == 'custom':
+        # カスタム分析
+        print("\nCustom Analysis Mode")
+        
+        if not args.data:
+            raise ValueError("Data file required for custom mode")
+        
+        results = run_lambda3_analysis(
+            data_source=args.data,
+            config=L3Config(),
+            analysis_type=args.analysis,
+            target_series=args.series,
+            verbose=True
         )
-
+    
     print("\n" + "="*60)
-    print("Lambda³ Analytics Framework - Analysis Complete!")
+    print("Analysis Complete!")
+    print("Structural tensor dynamics revealed in semantic space")
     print("="*60)
-
-    # 結果の簡易表示
-    if results:
-        print(f"\n分析結果サマリー:")
-        print(f"  分析系列数: {len(results['series_names'])}")
-        print(f"  データ期間: {results['config'].T}")
-
-        if 'hierarchical_results' in results:
-            print(f"  階層的分析: 完了")
-
-        if 'pairwise_results' in results:
-            print(f"  ペアワイズ分析: 完了")
-
-        if 'regime_results' in results:
-            print(f"  レジーム分析: 完了")
-
-        if 'crisis_results' in results:
-            crisis_episodes = len(results['crisis_results']['crisis_episodes'])
-            print(f"  危機検出: {crisis_episodes}エピソード")
-
-        print(f"\n構造テンソル空間における全∆ΛC pulsationsが解析され、")
-        print(f"progression vectors (ΛF) と tension scalars (ρT) の")
-        print(f"完全な相互作用パターンが明らかになりました。")
-
-        print(f"\nLambda³理論に基づく semantic structure space の")
-        print(f"多次元的理解が達成されました。")
