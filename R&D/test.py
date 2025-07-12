@@ -4,7 +4,7 @@
 # Refactored Framework for Structural Tensor Analysis
 # No time causality - structural pulsations (∆ΛC)
 #
-# Author: Masamichi Iizumi (Miosync, Inc.)
+# Author: Mamichi Iizumi (Miosync, Inc.)
 # License: MIT
 # Version: 2.0 (Refactored)
 # ==========================================================
@@ -24,11 +24,14 @@ from sklearn.mixture import GaussianMixture
 from sklearn.metrics import silhouette_score
 import networkx as nx
 from numba import jit, njit, prange
-from typing import Tuple, Dict, List, Optional
+from typing import Tuple, Dict, List, Optional, Any
 import pandas as pd
 from pathlib import Path
 from itertools import combinations
 import yfinance as yf
+from matplotlib.patches import Circle, FancyBboxPatch
+from matplotlib.collections import LineCollection
+import matplotlib.patches as mpatches
 
 # ===============================
 # GLOBAL CONSTANTS
@@ -1991,1143 +1994,594 @@ def analyze_hierarchical_synchronization(
         }
 
 # ===============================
-# SECTION 16: VISUALIZATION
+# SECTION 11: VISUALIZATION
+# ===============================
+class Lambda3Visualizer:
+    """
+    Lambda³理論に基づく統合可視化システム
+    構造テンソル空間の本質的ダイナミクスを表現
+    """
+    
+    def __init__(self, style: str = 'scientific'):
+        self.style = style
+        self._setup_style()
+        
+    def _setup_style(self):
+        """可視化スタイルの設定"""
+        if self.style == 'scientific':
+            plt.style.use('seaborn-v0_8-darkgrid')
+            self.colors = {
+                'pos_jump': '#e74c3c',
+                'neg_jump': '#3498db',
+                'tension': '#2ecc71',
+                'hierarchy_local': '#9b59b6',
+                'hierarchy_global': '#f39c12',
+                'background': '#ecf0f1'
+            }
+        else:
+            self.colors = plt.cm.Set1.colors
+            
+    def plot_structural_tensor_evolution(
+        self,
+        features_dict: Dict[str, Dict[str, np.ndarray]],
+        series_names: List[str],
+        figsize: Tuple[int, int] = (16, 8)
+    ) -> plt.Figure:
+        """
+        構造テンソル(Λ)の時間発展を統合可視化
+        ΔΛC pulsationとρTの本質的ダイナミクス
+        """
+        fig = plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
+        
+        # === 上段: ΔΛC Pulsation Timeline ===
+        ax1 = fig.add_subplot(gs[0])
+        self._plot_pulsation_timeline(ax1, features_dict, series_names)
+        
+        # === 中段: Tension Scalar Evolution ===
+        ax2 = fig.add_subplot(gs[1])
+        self._plot_tension_evolution(ax2, features_dict, series_names)
+        
+        # === 下段: Structural Coherence ===
+        ax3 = fig.add_subplot(gs[2])
+        self._plot_structural_coherence(ax3, features_dict, series_names)
+        
+        fig.suptitle('Structural Tensor Evolution in Semantic Space', 
+                     fontsize=16, fontweight='bold')
+        
+        return fig
+    
+    def _plot_pulsation_timeline(self, ax, features_dict, series_names):
+        """ΔΛC pulsationの統合タイムライン"""
+        n_series = len(series_names)
+        
+        for i, name in enumerate(series_names):
+            y_base = i
+            features = features_dict[name]
+            
+            # Positive pulsations
+            pos_indices = np.where(features['delta_LambdaC_pos'] > 0)[0]
+            pos_magnitudes = features['delta_LambdaC_pos'][pos_indices]
+            
+            # Negative pulsations
+            neg_indices = np.where(features['delta_LambdaC_neg'] > 0)[0]
+            neg_magnitudes = features['delta_LambdaC_neg'][neg_indices]
+            
+            # Plot as vertical lines with magnitude
+            if len(pos_indices) > 0:
+                ax.vlines(pos_indices, y_base, y_base + 0.4 * pos_magnitudes,
+                         colors=self.colors['pos_jump'], alpha=0.7, linewidth=2)
+                         
+            if len(neg_indices) > 0:
+                ax.vlines(neg_indices, y_base, y_base - 0.4 * neg_magnitudes,
+                         colors=self.colors['neg_jump'], alpha=0.7, linewidth=2)
+            
+            # Series label
+            ax.text(-5, y_base, name, ha='right', va='center', fontsize=10)
+        
+        ax.set_xlim(0, len(features_dict[series_names[0]]['data']))
+        ax.set_ylim(-0.5, n_series - 0.5)
+        ax.set_xlabel('Structural Time τ')
+        ax.set_title('ΔΛC Pulsations across Series')
+        ax.grid(True, alpha=0.3)
+        
+        # Legend
+        ax.plot([], [], color=self.colors['pos_jump'], linewidth=2, label='ΔΛC⁺')
+        ax.plot([], [], color=self.colors['neg_jump'], linewidth=2, label='ΔΛC⁻')
+        ax.legend(loc='upper right')
+        
+    def _plot_tension_evolution(self, ax, features_dict, series_names):
+        """張力スカラー(ρT)の進化"""
+        for i, name in enumerate(series_names):
+            rho_t = features_dict[name]['rho_T']
+            time = np.arange(len(rho_t))
+            
+            # Smooth tension curve
+            ax.plot(time, rho_t, label=name, alpha=0.8, linewidth=1.5)
+            
+        ax.set_xlabel('Structural Time τ')
+        ax.set_ylabel('Tension Scalar ρT')
+        ax.set_title('Evolution of Structural Tension')
+        ax.legend(loc='upper right', ncol=min(3, len(series_names)))
+        ax.grid(True, alpha=0.3)
+        
+    def _plot_structural_coherence(self, ax, features_dict, series_names):
+        """構造的一貫性の時間発展"""
+        window = 20
+        n_windows = len(features_dict[series_names[0]]['data']) - window + 1
+        
+        coherence_evolution = []
+        
+        for t in range(0, n_windows, 5):  # Skip every 5 for efficiency
+            # Calculate instantaneous coherence
+            coherence = 0
+            count = 0
+            
+            for i in range(len(series_names)):
+                for j in range(i+1, len(series_names)):
+                    rho_i = features_dict[series_names[i]]['rho_T'][t:t+window]
+                    rho_j = features_dict[series_names[j]]['rho_T'][t:t+window]
+                    
+                    if len(rho_i) > 1 and len(rho_j) > 1:
+                        corr = np.corrcoef(rho_i, rho_j)[0, 1]
+                        coherence += abs(corr)
+                        count += 1
+                        
+            if count > 0:
+                coherence_evolution.append(coherence / count)
+            else:
+                coherence_evolution.append(0)
+                
+        time_points = range(0, n_windows, 5)
+        ax.fill_between(time_points, coherence_evolution, alpha=0.3)
+        ax.plot(time_points, coherence_evolution, linewidth=2)
+        
+        ax.set_xlabel('Structural Time τ')
+        ax.set_ylabel('Coherence')
+        ax.set_title('Structural Coherence Evolution')
+        ax.set_ylim(0, 1)
+        ax.grid(True, alpha=0.3)
+        
+    def plot_hierarchical_dynamics(
+        self,
+        hierarchical_results: Dict[str, any],
+        figsize: Tuple[int, int] = (14, 8)
+    ) -> plt.Figure:
+        """階層的ダイナミクスの本質的可視化"""
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, 
+                                       gridspec_kw={'height_ratios': [2, 1]})
+        
+        # Extract first series with hierarchical data
+        series_name = None
+        series_data = None
+        for name, data in hierarchical_results.items():
+            if 'hierarchical_separation' in data and data['hierarchical_separation']:
+                series_name = name
+                series_data = data
+                break
+                
+        if series_data is None:
+            ax1.text(0.5, 0.5, 'No hierarchical data available', 
+                    transform=ax1.transAxes, ha='center', va='center')
+            return fig
+            
+        # === Upper: Hierarchical Flow Diagram ===
+        self._plot_hierarchical_flow(ax1, series_data, series_name)
+        
+        # === Lower: Transition Dynamics ===
+        self._plot_transition_dynamics(ax2, series_data)
+        
+        fig.suptitle(f'Hierarchical Structural Dynamics: {series_name}', 
+                     fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        
+        return fig
+        
+    def _plot_hierarchical_flow(self, ax, series_data, series_name):
+        """階層間フローの可視化"""
+        if 'hierarchical_separation' not in series_data:
+            return
+            
+        sep_data = series_data['hierarchical_separation']
+        local_series = sep_data.get('local_series', np.zeros(100))
+        global_series = sep_data.get('global_series', np.zeros(100))
+        
+        time = np.arange(len(local_series))
+        
+        # Create flow visualization
+        ax.fill_between(time, 0, local_series, 
+                       color=self.colors['hierarchy_local'], alpha=0.3, 
+                       label='Local Structure')
+        ax.fill_between(time, 0, -global_series, 
+                       color=self.colors['hierarchy_global'], alpha=0.3,
+                       label='Global Structure')
+                       
+        # Add flow arrows at transition points
+        coeffs = sep_data.get('separation_coefficients', {})
+        escalation = abs(coeffs.get('escalation', {}).get('coefficient', 0))
+        deescalation = abs(coeffs.get('deescalation', {}).get('coefficient', 0))
+        
+        # Annotate key transitions
+        ax.annotate(f'Escalation: {escalation:.3f}', 
+                   xy=(0.7, 0.8), xycoords='axes fraction',
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor='yellow', alpha=0.5))
+        ax.annotate(f'De-escalation: {deescalation:.3f}',
+                   xy=(0.7, 0.2), xycoords='axes fraction',
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor='lightblue', alpha=0.5))
+                   
+        ax.set_ylabel('Hierarchical Amplitude')
+        ax.set_title('Local ⇄ Global Structural Flow')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+        
+    def _plot_transition_dynamics(self, ax, series_data):
+        """遷移ダイナミクスの可視化"""
+        metrics = series_data.get('hierarchy_metrics', {})
+        
+        labels = ['Local\nDominance', 'Global\nDominance', 
+                 'Coupling\nStrength', 'Escalation\nRate']
+        values = [
+            metrics.get('local_dominance', 0),
+            metrics.get('global_dominance', 0),
+            metrics.get('coupling_strength', 0),
+            metrics.get('escalation_rate', 0)
+        ]
+        
+        x = np.arange(len(labels))
+        bars = ax.bar(x, values, color=['#9b59b6', '#f39c12', '#2ecc71', '#e74c3c'])
+        
+        # Add value labels
+        for bar, value in zip(bars, values):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{value:.3f}', ha='center', va='bottom')
+                   
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.set_ylabel('Metric Value')
+        ax.set_title('Hierarchical Transition Metrics')
+        ax.grid(True, alpha=0.3, axis='y')
+        
+    def plot_interaction_network(
+        self,
+        interaction_results: Dict[str, any],
+        series_names: List[str],
+        figsize: Tuple[int, int] = (12, 10)
+    ) -> plt.Figure:
+        """相互作用ネットワークの本質的可視化"""
+        fig = plt.figure(figsize=figsize)
+        
+        # Create main axis for network
+        ax_main = fig.add_subplot(111)
+        
+        # Build interaction graph
+        G = self._build_interaction_graph(interaction_results, series_names)
+        
+        # Network layout
+        pos = nx.spring_layout(G, k=2, iterations=50)
+        
+        # Draw nodes
+        nx.draw_networkx_nodes(G, pos, node_color='lightblue', 
+                              node_size=3000, alpha=0.9, ax=ax_main)
+        
+        # Draw edges with varying widths based on interaction strength
+        edges = G.edges()
+        weights = [G[u][v]['weight'] for u, v in edges]
+        
+        nx.draw_networkx_edges(G, pos, width=[w*5 for w in weights],
+                              alpha=0.6, edge_color='gray', 
+                              arrows=True, arrowsize=20, ax=ax_main)
+        
+        # Draw labels
+        nx.draw_networkx_labels(G, pos, font_size=12, font_weight='bold', ax=ax_main)
+        
+        # Add edge labels for significant interactions
+        edge_labels = {}
+        for u, v, data in G.edges(data=True):
+            if data['weight'] > 0.1:  # Only show significant interactions
+                edge_labels[(u, v)] = f"{data['weight']:.2f}"
+                
+        nx.draw_networkx_edge_labels(G, pos, edge_labels, font_size=9, ax=ax_main)
+        
+        ax_main.set_title('Structural Tensor Interaction Network', 
+                         fontsize=16, fontweight='bold')
+        ax_main.axis('off')
+        
+        # Add legend
+        legend_elements = [
+            mpatches.Patch(color='gray', label='Interaction Strength'),
+            mpatches.Patch(color='lightblue', label='Series Node')
+        ]
+        ax_main.legend(handles=legend_elements, loc='upper right')
+        
+        return fig
+        
+    def _build_interaction_graph(self, interaction_results, series_names):
+        """相互作用グラフの構築"""
+        G = nx.DiGraph()
+        
+        # Add nodes
+        for name in series_names:
+            G.add_node(name)
+            
+        # Add edges based on interaction strengths
+        if 'interaction_matrix' in interaction_results:
+            matrix = interaction_results['interaction_matrix']
+            for i, name_i in enumerate(series_names):
+                for j, name_j in enumerate(series_names):
+                    if i != j and matrix[i, j] > 0:
+                        G.add_edge(name_i, name_j, weight=matrix[i, j])
+                        
+        elif 'pairs' in interaction_results:
+            # Extract from pairwise results
+            for pair_key, pair_data in interaction_results['pairs'].items():
+                if 'interaction_coefficients' in pair_data:
+                    coeffs = pair_data['interaction_coefficients']
+                    if 'cross_effects' in coeffs:
+                        for direction, effects in coeffs['cross_effects'].items():
+                            parts = direction.split('_to_')
+                            if len(parts) == 2:
+                                strength = sum(abs(v) for v in effects.values())
+                                G.add_edge(parts[0], parts[1], weight=strength)
+                                
+        return G
+        
+    def plot_lambda3_core_dashboard(
+        self,
+        results: Dict[str, any],
+        figsize: Tuple[int, int] = (18, 12)
+    ) -> plt.Figure:
+        """Lambda³コアダイナミクスの統合ダッシュボード"""
+        fig = plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3,
+                             height_ratios=[1.5, 1, 1],
+                             width_ratios=[2, 1, 1])
+        
+        features_dict = results.get('features_dict', {})
+        series_names = results.get('series_names', [])
+        
+        # === 1. Main: Structural Evolution Timeline ===
+        ax1 = fig.add_subplot(gs[0, :])
+        self._plot_integrated_timeline(ax1, features_dict, series_names)
+        
+        # === 2. Interaction Matrix ===
+        ax2 = fig.add_subplot(gs[1, 0])
+        self._plot_interaction_matrix(ax2, results)
+        
+        # === 3. Synchronization Profile ===
+        ax3 = fig.add_subplot(gs[1, 1:])
+        self._plot_synchronization_profile(ax3, results)
+        
+        # === 4. Crisis/Regime Indicators ===
+        ax4 = fig.add_subplot(gs[2, :])
+        self._plot_structural_indicators(ax4, results)
+        
+        fig.suptitle('Lambda³ Structural Tensor Dynamics Dashboard',
+                     fontsize=18, fontweight='bold')
+                     
+        return fig
+        
+    def _plot_integrated_timeline(self, ax, features_dict, series_names):
+        """統合構造変化タイムライン"""
+        if not features_dict or not series_names:
+            return
+            
+        # Aggregate structural changes
+        time_length = len(features_dict[series_names[0]]['data'])
+        aggregate_pos = np.zeros(time_length)
+        aggregate_neg = np.zeros(time_length)
+        
+        for name in series_names:
+            aggregate_pos += features_dict[name]['delta_LambdaC_pos']
+            aggregate_neg += features_dict[name]['delta_LambdaC_neg']
+            
+        time = np.arange(time_length)
+        
+        # Plot aggregated pulsations
+        ax.fill_between(time, 0, aggregate_pos, color=self.colors['pos_jump'], 
+                       alpha=0.5, label='Aggregate ΔΛC⁺')
+        ax.fill_between(time, 0, -aggregate_neg, color=self.colors['neg_jump'],
+                       alpha=0.5, label='Aggregate ΔΛC⁻')
+                       
+        # Overlay average tension
+        avg_tension = np.mean([features_dict[name]['rho_T'] for name in series_names], axis=0)
+        ax2 = ax.twinx()
+        ax2.plot(time, avg_tension, color=self.colors['tension'], 
+                linewidth=2, label='Average ρT')
+        ax2.set_ylabel('Average Tension ρT', color=self.colors['tension'])
+        ax2.tick_params(axis='y', labelcolor=self.colors['tension'])
+        
+        ax.set_xlabel('Structural Time τ')
+        ax.set_ylabel('Aggregate Structural Change')
+        ax.set_title('Integrated Structural Evolution')
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+        
+    def _plot_interaction_matrix(self, ax, results):
+        """相互作用行列の可視化"""
+        if 'sync_matrix' in results:
+            matrix = results['sync_matrix']
+            series_names = results.get('series_names', [])
+            
+            im = ax.imshow(matrix, cmap='Blues', vmin=0, vmax=1)
+            ax.set_xticks(range(len(series_names)))
+            ax.set_yticks(range(len(series_names)))
+            ax.set_xticklabels(series_names, rotation=45, ha='right')
+            ax.set_yticklabels(series_names)
+            ax.set_title('Synchronization Matrix')
+            
+            # Add text annotations
+            for i in range(len(series_names)):
+                for j in range(len(series_names)):
+                    text = ax.text(j, i, f'{matrix[i, j]:.2f}',
+                                  ha="center", va="center",
+                                  color="white" if matrix[i, j] > 0.5 else "black")
+                                  
+    def _plot_synchronization_profile(self, ax, results):
+        """同期プロファイルの可視化"""
+        if 'causality_results' in results:
+            causality = results['causality_results']
+            if 'basic_causality' in causality:
+                # Plot causality patterns
+                for direction, pattern in causality['basic_causality'].items():
+                    if pattern:
+                        lags = list(pattern.keys())
+                        probs = list(pattern.values())
+                        ax.plot(lags, probs, 'o-', label=direction.replace('_', '→'),
+                               markersize=6, alpha=0.8)
+                               
+                ax.set_xlabel('Lag')
+                ax.set_ylabel('Causality Strength')
+                ax.set_title('Structural Causality Profile')
+                ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+                ax.grid(True, alpha=0.3)
+                
+    def _plot_structural_indicators(self, ax, results):
+        """構造的指標の時系列"""
+        if 'crisis_results' in results:
+            crisis = results['crisis_results']
+            aggregate_crisis = crisis.get('aggregate_crisis', [])
+            
+            if len(aggregate_crisis) > 0:
+                time = np.arange(len(aggregate_crisis))
+                ax.plot(time, aggregate_crisis, 'k-', linewidth=2)
+                ax.axhline(y=0.8, color='r', linestyle='--', alpha=0.7,
+                          label='Crisis Threshold')
+                          
+                # Highlight crisis episodes
+                for start, end in crisis.get('crisis_episodes', []):
+                    ax.axvspan(start, end, alpha=0.2, color='red')
+                    
+                ax.set_xlabel('Structural Time τ')
+                ax.set_ylabel('Crisis Indicator')
+                ax.set_title('Structural Crisis Detection')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+# ===============================
+# Standalone plotting functions
 # ===============================
 
-def plot_hierarchical_separation_analysis(
-    separation_results: Dict[str, any],
-    structural_changes: Dict[str, np.ndarray]
-):
-    """
-    Visualization of hierarchical separation analysis results
-    """
-    import matplotlib.pyplot as plt
-
-    series_name = separation_results['series_name']
-    separation_coeffs = separation_results['separation_coefficients']
-    asymmetry_metrics = separation_results['asymmetry_metrics']
-    local_series = separation_results['local_series']
-    global_series = separation_results['global_series']
-
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-
-    # === 1. Hierarchical series comparison ===
-    ax1 = axes[0, 0]
-    time_axis = np.arange(len(local_series))
-    ax1.plot(time_axis, local_series, 'b-', label='Local Series', linewidth=2, alpha=0.8)
-    ax1.plot(time_axis, global_series, 'r-', label='Global Series', linewidth=2, alpha=0.8)
-
-    ax1.set_title(f'{series_name}: Hierarchical Decomposition Series', fontsize=14, fontweight='bold')
-    ax1.set_xlabel('Time')
-    ax1.set_ylabel('Value')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    # === 2. Separation coefficients comparison ===
-    ax2 = axes[0, 1]
-    coeff_labels = ['Escalation\n(L→G)', 'Deescalation\n(G→L)', 'Local\nEffect', 'Global\nEffect']
-    coeff_values = [
-        separation_coeffs['escalation']['coefficient'],
-        separation_coeffs['deescalation']['coefficient'],
-        separation_coeffs['local_effect']['coefficient'],
-        separation_coeffs['global_effect']['coefficient']
-    ]
-    coeff_errors = [
-        [separation_coeffs['escalation']['coefficient'] - separation_coeffs['escalation']['hdi_lower'],
-         separation_coeffs['deescalation']['coefficient'] - separation_coeffs['deescalation']['hdi_lower'],
-         separation_coeffs['local_effect']['coefficient'] - separation_coeffs['local_effect']['hdi_lower'],
-         separation_coeffs['global_effect']['coefficient'] - separation_coeffs['global_effect']['hdi_lower']],
-        [separation_coeffs['escalation']['hdi_upper'] - separation_coeffs['escalation']['coefficient'],
-         separation_coeffs['deescalation']['hdi_upper'] - separation_coeffs['deescalation']['coefficient'],
-         separation_coeffs['local_effect']['hdi_upper'] - separation_coeffs['local_effect']['coefficient'],
-         separation_coeffs['global_effect']['hdi_upper'] - separation_coeffs['global_effect']['coefficient']]
-    ]
-
-    colors = ['skyblue', 'lightcoral', 'lightgreen', 'lightpink']
-    bars = ax2.bar(coeff_labels, coeff_values, color=colors, alpha=0.8,
-                   yerr=coeff_errors, capsize=5)
-
-    ax2.set_title(f'{series_name}: Hierarchical Interaction Coefficients')
-    ax2.set_ylabel('Bayesian Coefficient')
-    ax2.grid(True, alpha=0.3)
-    ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-
-    for bar, value in zip(bars, coeff_values):
-        height = bar.get_height()
-        ax2.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                f'{value:.3f}', ha='center', va='bottom', fontsize=10)
-
-    # === 3. Asymmetry metrics ===
-    ax3 = axes[0, 2]
-    asymmetry_labels = ['Transition\nAsymmetry', 'Escalation\nDominance',
-                       'Deescalation\nDominance']
-
-    # 正しい変数名を使用してasymmetry_valuesを取得
-    asymmetry_values = [
-        asymmetry_metrics['transition_asymmetry'],
-        asymmetry_metrics['escalation_dominance'],
-        asymmetry_metrics['deescalation_dominance']
-    ]
-
-    colors = ['lightblue', 'lightgreen', 'lightpink']
-    bars = ax3.bar(asymmetry_labels, asymmetry_values, color=colors, alpha=0.8)
-
-    ax3.set_title(f'{series_name}: Hierarchical Asymmetry Metrics')
-    ax3.set_ylabel('Asymmetry Metric')
-    ax3.grid(True, alpha=0.3)
-    ax3.axhline(y=0, color='red', linestyle='--', alpha=0.7)
-
-    for bar, value in zip(bars, asymmetry_values):
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                f'{value:.3f}', ha='center', va='bottom', fontsize=9)
-
-    # === 4. Correlation between hierarchical series ===
-    ax4 = axes[1, 0]
-    ax4.scatter(local_series, global_series, alpha=0.6, s=30, color='purple')
-    ax4.set_xlabel('Local Series')
-    ax4.set_ylabel('Global Series')
-    ax4.set_title(f'{series_name}: Hierarchical Correlation')
-    ax4.grid(True, alpha=0.3)
-
-    # 階層間相関を正しく取得
-    hierarchy_correlation = separation_coeffs.get('hierarchy_correlation', 0.0)
-    ax4.text(0.05, 0.95, f'Correlation: {hierarchy_correlation:.3f}',
-             transform=ax4.transAxes, bbox=dict(boxstyle="round", facecolor='wheat'))
-
-    # === 5. Hierarchical strength distribution ===
-    ax5 = axes[1, 1]
-    # 安全な配列取得と加算
-    local_pos = structural_changes.get('pure_local_pos', np.array([]))
-    local_neg = structural_changes.get('pure_local_neg', np.array([]))
-    global_pos = structural_changes.get('pure_global_pos', np.array([]))
-    global_neg = structural_changes.get('pure_global_neg', np.array([]))
-
-    # 配列が存在する場合のみ結合
-    local_effects = np.concatenate([local_pos, local_neg]) if len(local_pos) > 0 or len(local_neg) > 0 else np.array([])
-    global_effects = np.concatenate([global_pos, global_neg]) if len(global_pos) > 0 or len(global_neg) > 0 else np.array([])
-
-    if len(local_effects) > 0:
-        ax5.hist(local_effects, bins=20, alpha=0.7, label='Local', color='blue', density=True)
-    if len(global_effects) > 0:
-        ax5.hist(global_effects, bins=20, alpha=0.7, label='Global', color='red', density=True)
-
-    ax5.set_title(f'{series_name}: Hierarchical Strength Distribution')
-    ax5.set_xlabel('Structural Change Strength')
-    ax5.set_ylabel('Density')
-    ax5.legend()
-    ax5.grid(True, alpha=0.3)
-
-    # === 6. Hierarchical transition diagram ===
-    ax6 = axes[1, 2]
-    local_pos = (0.2, 0.5)
-    global_pos = (0.8, 0.5)
-    circle_local = plt.Circle(local_pos, 0.1, color='lightblue', alpha=0.8)
-    circle_global = plt.Circle(global_pos, 0.1, color='lightcoral', alpha=0.8)
-    ax6.add_patch(circle_local)
-    ax6.add_patch(circle_global)
-    ax6.text(local_pos[0], local_pos[1], 'Local', ha='center', va='center', fontweight='bold')
-    ax6.text(global_pos[0], global_pos[1], 'Global', ha='center', va='center', fontweight='bold')
-
-    escalation_strength = abs(separation_coeffs['escalation']['coefficient'])
-    deescalation_strength = abs(separation_coeffs['deescalation']['coefficient'])
-
-    # Local → Global
-    ax6.annotate('', xy=(global_pos[0] - 0.08, global_pos[1] + 0.02),
-                xytext=(local_pos[0] + 0.08, local_pos[1] + 0.02),
-                arrowprops=dict(arrowstyle='->', lw=max(1, escalation_strength*20),
-                               color='blue', alpha=0.7))
-    ax6.text(0.5, 0.6, f'E: {escalation_strength:.3f}', ha='center', color='blue',
-             fontweight='bold')
-    # Global → Local
-    ax6.annotate('', xy=(local_pos[0] + 0.08, local_pos[1] - 0.02),
-                xytext=(global_pos[0] - 0.08, global_pos[1] - 0.02),
-                arrowprops=dict(arrowstyle='->', lw=max(1, deescalation_strength*20),
-                               color='red', alpha=0.7))
-    ax6.text(0.5, 0.4, f'D: {deescalation_strength:.3f}', ha='center', color='red',
-             fontweight='bold')
-
-    ax6.set_xlim(0, 1)
-    ax6.set_ylim(0, 1)
-    ax6.set_title(f'{series_name}: Hierarchical Transition Diagram\n(Arrow width = transition strength)')
-    ax6.axis('off')
-
-    plt.tight_layout()
-    plt.show()
-
-def plot_crisis_detection(crisis_results, asset_names):
-    """Plot crisis detection results."""
-    plt.figure(figsize=(15, 8))
-
-    for asset_name, scores in crisis_results['crisis_indicators'].items():
-        plt.plot(scores, alpha=0.6, label=asset_name)
-
-    plt.plot(crisis_results['aggregate_crisis'], 'k-', linewidth=2, label='Aggregate Crisis Score')
-    plt.axhline(y=0.8, color='r', linestyle='--', label='Crisis Threshold')
-
-    for start, end in crisis_results['crisis_episodes']:
-        plt.axvspan(start, end, alpha=0.2, color='red')
-
-    plt.title("Financial Crisis Detection - Lambda³ Analysis")
-    plt.xlabel("Time Step")
-    plt.ylabel("Crisis Score")
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-def plot_regime_synchronization_matrix(sync_matrix, asset_names):
-    """Plot cross-asset regime synchronization matrix."""
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(sync_matrix,
-                annot=True, fmt='.3f',
-                xticklabels=asset_names,
-                yticklabels=asset_names,
-                cmap="Reds", vmin=0, vmax=1,
-                square=True)
-    plt.title("Cross-Asset Regime Synchronization Matrix")
-    plt.tight_layout()
-    plt.show()
-
-def plot_sync_network(G: nx.DiGraph):
-    """Plot synchronization network graph."""
-    plt.figure(figsize=(12, 8))
-    pos = nx.spring_layout(G, k=3, iterations=50)
-
-    edge_labels = {
-        (u, v): f"σₛ:{d['weight']:.2f},lag:{d['lag']}"
-        for u, v, d in G.edges(data=True)
-    }
-
-    nx.draw(G, pos, with_labels=True, node_color='skyblue',
-            node_size=1500, font_size=10, arrowsize=20)
-    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8)
-    plt.title("Synchronization (σₛ) Network")
-    plt.tight_layout()
-    plt.show()
-
-def plot_asymmetric_interaction_analysis(
-    asymmetric_results: Dict[str, any],
-    features_dict: Dict[str, Dict[str, np.ndarray]]
-):
-    """
-    Visualization of asymmetric interaction analysis results.
-    Lambda³ Theory: Directionality of structural tensor interactions.
-    """
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    series_names = asymmetric_results['series_names']
-    name_a, name_b = series_names
-
-    interaction_coeffs = asymmetric_results['interaction_coefficients']
-    asymmetry_metrics = asymmetric_results['asymmetry_metrics']
-
-    data_a = features_dict[name_a]['data']
-    data_b = features_dict[name_b]['data']
-
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-
-    # === 1. Directional Interaction Coefficient Comparison ===
-    ax1 = axes[0, 0]
-    categories = ['Pos Jump', 'Neg Jump', 'Tension']
-    b_to_a_values = [
-        interaction_coeffs[f'{name_b}_to_{name_a}']['pos_jump'],
-        interaction_coeffs[f'{name_b}_to_{name_a}']['neg_jump'],
-        interaction_coeffs[f'{name_b}_to_{name_a}']['tension']
-    ]
-    a_to_b_values = [
-        interaction_coeffs[f'{name_a}_to_{name_b}']['pos_jump'],
-        interaction_coeffs[f'{name_a}_to_{name_b}']['neg_jump'],
-        interaction_coeffs[f'{name_a}_to_{name_b}']['tension']
-    ]
-    x = np.arange(len(categories))
-    width = 0.35
-
-    bars1 = ax1.bar(x - width/2, b_to_a_values, width,
-                    label=f'{name_b} → {name_a}', alpha=0.8, color='skyblue')
-    bars2 = ax1.bar(x + width/2, a_to_b_values, width,
-                    label=f'{name_a} → {name_b}', alpha=0.8, color='lightcoral')
-
-    ax1.set_xlabel('Structural Tensor Component')
-    ax1.set_ylabel('Interaction Coefficient')
-    ax1.set_title('Directional Structural Tensor Interaction Coefficient')
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(categories)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    for bar, value in zip(bars1, b_to_a_values):
-        height = bar.get_height()
-        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.001,
-                f'{value:.3f}', ha='center', va='bottom', fontsize=8)
-    for bar, value in zip(bars2, a_to_b_values):
-        height = bar.get_height()
-        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.001,
-                f'{value:.3f}', ha='center', va='bottom', fontsize=8)
-
-    # === 2. Asymmetry Metrics ===
-    ax2 = axes[0, 1]
-    asymmetry_labels = ['Pos Jump', 'Neg Jump', 'Tension', 'Total']
-    asymmetry_values = [
-        asymmetry_metrics['pos_jump_asymmetry'],
-        asymmetry_metrics['neg_jump_asymmetry'],
-        asymmetry_metrics['tension_asymmetry'],
-        asymmetry_metrics['total_asymmetry']
-    ]
-    colors = ['lightblue', 'lightgreen', 'lightpink', 'gold']
-    bars = ax2.bar(asymmetry_labels, asymmetry_values, color=colors, alpha=0.8)
-
-    ax2.set_ylabel('Asymmetry Metric')
-    ax2.set_title('Structural Tensor Asymmetry Metrics')
-    ax2.grid(True, alpha=0.3)
-    ax2.axhline(y=0, color='red', linestyle='--', alpha=0.7)
-
-    for bar, value in zip(bars, asymmetry_values):
-        height = bar.get_height()
-        ax2.text(bar.get_x() + bar.get_width()/2., height + 0.001,
-                f'{value:.3f}', ha='center', va='bottom', fontsize=9)
-
-    # === 3. Structural Change Event Timeline ===
-    ax3 = axes[0, 2]
-    pos_events_a = np.where(features_dict[name_a]['delta_LambdaC_pos'] > 0)[0]
-    neg_events_a = np.where(features_dict[name_a]['delta_LambdaC_neg'] > 0)[0]
-    pos_events_b = np.where(features_dict[name_b]['delta_LambdaC_pos'] > 0)[0]
-    neg_events_b = np.where(features_dict[name_b]['delta_LambdaC_neg'] > 0)[0]
-
-    ax3.scatter(pos_events_a, [1] * len(pos_events_a),
-               c='blue', marker='^', s=50, alpha=0.7, label=f'{name_a} ΔΛC⁺')
-    ax3.scatter(neg_events_a, [0.8] * len(neg_events_a),
-               c='red', marker='v', s=50, alpha=0.7, label=f'{name_a} ΔΛC⁻')
-    ax3.scatter(pos_events_b, [0.4] * len(pos_events_b),
-               c='darkblue', marker='^', s=50, alpha=0.7, label=f'{name_b} ΔΛC⁺')
-    ax3.scatter(neg_events_b, [0.2] * len(neg_events_b),
-               c='darkred', marker='v', s=50, alpha=0.7, label=f'{name_b} ΔΛC⁻')
-
-    ax3.set_xlabel('Time')
-    ax3.set_ylabel('Series')
-    ax3.set_title('Structural Change Event Timeline')
-    ax3.set_yticks([0.2, 0.4, 0.8, 1.0])
-    ax3.set_yticklabels([f'{name_b} ΔΛC⁻', f'{name_b} ΔΛC⁺',
-                        f'{name_a} ΔΛC⁻', f'{name_a} ΔΛC⁺'])
-    ax3.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    ax3.grid(True, alpha=0.3)
-
-    # === 4. Tension Scalar Cross-Correlation ===
-    ax4 = axes[1, 0]
-    rho_a = features_dict[name_a]['rho_T']
-    rho_b = features_dict[name_b]['rho_T']
-    ax4.scatter(rho_a, rho_b, alpha=0.6, s=30)
-    ax4.set_xlabel(f'{name_a} Tension Scalar (ρT)')
-    ax4.set_ylabel(f'{name_b} Tension Scalar (ρT)')
-    ax4.set_title('Tension Scalar Cross-Correlation')
-    ax4.grid(True, alpha=0.3)
-    correlation = np.corrcoef(rho_a, rho_b)[0, 1]
-    ax4.text(0.05, 0.95, f'Correlation: {correlation:.3f}',
-             transform=ax4.transAxes, bbox=dict(boxstyle="round", facecolor='wheat'))
-
-    # === 5. Interaction Directionality Network ===
-    ax5 = axes[1, 1]
-    pos_a = (0.2, 0.5)
-    pos_b = (0.8, 0.5)
-    circle_a = plt.Circle(pos_a, 0.1, color='lightblue', alpha=0.8)
-    circle_b = plt.Circle(pos_b, 0.1, color='lightcoral', alpha=0.8)
-    ax5.add_patch(circle_a)
-    ax5.add_patch(circle_b)
-    ax5.text(pos_a[0], pos_a[1], name_a, ha='center', va='center', fontweight='bold')
-    ax5.text(pos_b[0], pos_b[1], name_b, ha='center', va='center', fontweight='bold')
-
-    total_b_to_a = sum(abs(v) for v in interaction_coeffs[f'{name_b}_to_{name_a}'].values())
-    total_a_to_b = sum(abs(v) for v in interaction_coeffs[f'{name_a}_to_{name_b}'].values())
-    # B → A
-    ax5.annotate('', xy=(pos_a[0] + 0.08, pos_a[1] + 0.02),
-                xytext=(pos_b[0] - 0.08, pos_b[1] + 0.02),
-                arrowprops=dict(arrowstyle='->', lw=total_b_to_a*10, color='blue', alpha=0.7))
-    ax5.text(0.5, 0.6, f'{total_b_to_a:.3f}', ha='center', color='blue', fontweight='bold')
-    # A → B
-    ax5.annotate('', xy=(pos_b[0] - 0.08, pos_b[1] - 0.02),
-                xytext=(pos_a[0] + 0.08, pos_a[1] - 0.02),
-                arrowprops=dict(arrowstyle='->', lw=total_a_to_b*10, color='red', alpha=0.7))
-    ax5.text(0.5, 0.4, f'{total_a_to_b:.3f}', ha='center', color='red', fontweight='bold')
-
-    ax5.set_xlim(0, 1)
-    ax5.set_ylim(0, 1)
-    ax5.set_title('Structural Tensor Interaction Network\n(Arrow width = interaction strength)')
-    ax5.axis('off')
-
-    # === 6. Asymmetry Pattern Analysis ===
-    ax6 = axes[1, 2]
-    pos_asym = asymmetry_metrics['pos_jump_asymmetry']
-    neg_asym = asymmetry_metrics['neg_jump_asymmetry']
-    tension_asym = asymmetry_metrics['tension_asymmetry']
-    ax6.quiver(0, 0, pos_asym, 0, angles='xy', scale_units='xy', scale=1,
-              color='blue', width=0.01, label='Pos Jump Asymmetry')
-    ax6.quiver(0, 0, 0, neg_asym, angles='xy', scale_units='xy', scale=1,
-              color='red', width=0.01, label='Neg Jump Asymmetry')
-    ax6.quiver(0, 0, tension_asym/2, tension_asym/2, angles='xy', scale_units='xy', scale=1,
-              color='green', width=0.01, label='Tension Asymmetry')
-    ax6.set_xlabel('Asymmetry X component')
-    ax6.set_ylabel('Asymmetry Y component')
-    ax6.set_title('Asymmetry Vector Decomposition')
-    ax6.legend()
-    ax6.grid(True, alpha=0.3)
-    ax6.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-    ax6.axvline(x=0, color='black', linestyle='-', alpha=0.3)
-
-    plt.tight_layout()
-    plt.show()
-
-def visualize_pairwise_results(
-    data_dict: Dict[str, np.ndarray],
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    predictions: Dict[str, np.ndarray],
-    interaction_coeffs: Dict[str, Dict[str, float]],
-    causality_patterns: Dict[str, Dict[int, float]],
-    series_names: List[str]
-):
-    """
-    Pairwise Analysis Results Visualization
-    Lambda³ Theory: Complete Visualization of Structural Tensor Interactions
-    """
-    import matplotlib.pyplot as plt
-
-    name_a, name_b = series_names
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-
-    # === 1. Time Series and Prediction (Series A) ===
-    ax1 = axes[0, 0]
-    ax1.plot(data_dict[name_a], 'o-', alpha=0.7, label=f'{name_a} (Observed)', linewidth=2)
-    ax1.plot(predictions[name_a], '--', alpha=0.8, label=f'{name_a} (Predicted)', linewidth=2)
-
-    pos_events_a = np.where(features_dict[name_a]['delta_LambdaC_pos'] > 0)[0]
-    neg_events_a = np.where(features_dict[name_a]['delta_LambdaC_neg'] > 0)[0]
-
-    if len(pos_events_a) > 0:
-        ax1.scatter(pos_events_a, data_dict[name_a][pos_events_a],
-                   c='blue', marker='^', s=100, alpha=0.7, label='ΔΛC⁺', zorder=5)
-    if len(neg_events_a) > 0:
-        ax1.scatter(neg_events_a, data_dict[name_a][neg_events_a],
-                   c='red', marker='v', s=100, alpha=0.7, label='ΔΛC⁻', zorder=5)
-
-    ax1.set_title(f'{name_a}: Time Series & Structural Tensor Prediction', fontsize=14, fontweight='bold')
-    ax1.set_xlabel('Time')
-    ax1.set_ylabel('Value')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    # === 2. Time Series and Prediction (Series B) ===
-    ax2 = axes[0, 1]
-    ax2.plot(data_dict[name_b], 'o-', alpha=0.7, label=f'{name_b} (Observed)', linewidth=2)
-    ax2.plot(predictions[name_b], '--', alpha=0.8, label=f'{name_b} (Predicted)', linewidth=2)
-
-    pos_events_b = np.where(features_dict[name_b]['delta_LambdaC_pos'] > 0)[0]
-    neg_events_b = np.where(features_dict[name_b]['delta_LambdaC_neg'] > 0)[0]
-
-    if len(pos_events_b) > 0:
-        ax2.scatter(pos_events_b, data_dict[name_b][pos_events_b],
-                   c='blue', marker='^', s=100, alpha=0.7, label='ΔΛC⁺', zorder=5)
-    if len(neg_events_b) > 0:
-        ax2.scatter(neg_events_b, data_dict[name_b][neg_events_b],
-                   c='red', marker='v', s=100, alpha=0.7, label='ΔΛC⁻', zorder=5)
-
-    ax2.set_title(f'{name_b}: Time Series & Structural Tensor Prediction', fontsize=14, fontweight='bold')
-    ax2.set_xlabel('Time')
-    ax2.set_ylabel('Value')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    # === 3. Interaction Coefficients ===
-    ax3 = axes[1, 0]
-    try:
-        if interaction_coeffs and isinstance(list(interaction_coeffs.values())[0], dict):
-            if f'{name_a}_to_{name_b}' in interaction_coeffs:
-                labels = ['Pos Jump', 'Neg Jump', 'Tension']
-                ab_effects = [
-                    interaction_coeffs[f'{name_a}_to_{name_b}'].get('pos_jump', 0),
-                    interaction_coeffs[f'{name_a}_to_{name_b}'].get('neg_jump', 0),
-                    interaction_coeffs[f'{name_a}_to_{name_b}'].get('tension', 0)
-                ]
-                ba_effects = [
-                    interaction_coeffs[f'{name_b}_to_{name_a}'].get('pos_jump', 0),
-                    interaction_coeffs[f'{name_b}_to_{name_a}'].get('neg_jump', 0),
-                    interaction_coeffs[f'{name_b}_to_{name_a}'].get('tension', 0)
-                ]
-            else:
-                cross_effects = interaction_coeffs.get('cross_effects', {})
-                labels = ['Pos Jump', 'Neg Jump', 'Tension']
-                ab_effects = [
-                    cross_effects.get(f'{name_a}_to_{name_b}', {}).get('pos_jump', 0),
-                    cross_effects.get(f'{name_a}_to_{name_b}', {}).get('neg_jump', 0),
-                    cross_effects.get(f'{name_a}_to_{name_b}', {}).get('tension', 0)
-                ]
-                ba_effects = [
-                    cross_effects.get(f'{name_b}_to_{name_a}', {}).get('pos_jump', 0),
-                    cross_effects.get(f'{name_b}_to_{name_a}', {}).get('neg_jump', 0),
-                    cross_effects.get(f'{name_b}_to_{name_a}', {}).get('tension', 0)
-                ]
-        else:
-            labels = ['Total Effect']
-            ab_effects = [0]
-            ba_effects = [0]
-
-        x = np.arange(len(labels))
-        width = 0.35
-
-        bars1 = ax3.bar(x - width/2, ab_effects, width, label=f'{name_a}→{name_b}', alpha=0.8, color='skyblue')
-        bars2 = ax3.bar(x + width/2, ba_effects, width, label=f'{name_b}→{name_a}', alpha=0.8, color='lightcoral')
-
-        ax3.set_title('Structural Tensor Interaction Coefficients', fontsize=14, fontweight='bold')
-        ax3.set_xlabel('Interaction Type')
-        ax3.set_ylabel('Bayesian Coefficient')
-        ax3.set_xticks(x)
-        ax3.set_xticklabels(labels)
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-        ax3.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-
-        for bar, value in zip(bars1, ab_effects):
-            height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.001,
-                    f'{value:.3f}', ha='center', va='bottom', fontsize=9)
-        for bar, value in zip(bars2, ba_effects):
-            height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.001,
-                    f'{value:.3f}', ha='center', va='bottom', fontsize=9)
-    except Exception as e:
-        ax3.text(0.5, 0.5, f'Interaction Data Error:\n{str(e)}',
-                transform=ax3.transAxes, ha='center', va='center')
-        ax3.set_title('Structural Tensor Interaction Coefficients (Error)', fontsize=14)
-
-    # === 4. Causality Patterns ===
-    ax4 = axes[1, 1]
-    try:
-        causality_colors = ['blue', 'red', 'green', 'purple', 'orange', 'brown', 'pink', 'gray']
-        color_idx = 0
-        max_values = []
-
-        if causality_patterns:
-            for direction, pattern in causality_patterns.items():
-                if pattern and isinstance(pattern, dict):
-                    lags = list(pattern.keys())
-                    probs = list(pattern.values())
-                    if probs:
-                        max_values.append(max(probs))
-                        color = causality_colors[color_idx % len(causality_colors)]
-                        ax4.plot(lags, probs, 'o-', label=direction, linewidth=2,
-                                color=color, markersize=6, alpha=0.8)
-                        color_idx += 1
-
-        ax4.set_title('Causality Pattern of Structural Changes', fontsize=14, fontweight='bold')
-        ax4.set_xlabel('Lag')
-        ax4.set_ylabel('Causality Probability')
-        ax4.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-        ax4.grid(True, alpha=0.3)
-
-        if max_values:
-            y_max = max(max_values) * 1.1
-        else:
-            y_max = 1.0
-        ax4.set_ylim(0, y_max)
-    except Exception as e:
-        ax4.text(0.5, 0.5, f'Causality Pattern Error:\n{str(e)}',
-                transform=ax4.transAxes, ha='center', va='center')
-        ax4.set_title('Causality Pattern (Error)', fontsize=14)
-
-    plt.tight_layout()
-    plt.show()
-
-    # === 統計サマリーの安全な出力 ===
-    try:
-        print(f"\n{name_a} ⇄ {name_b} 構造テンソル相互作用サマリー:")
-        print(f"{'='*60}")
-
-        # 相互作用強度の計算
-        if interaction_coeffs and isinstance(list(interaction_coeffs.values())[0], dict):
-            if f'{name_a}_to_{name_b}' in interaction_coeffs:
-                total_ab = sum(abs(v) for v in interaction_coeffs[f'{name_a}_to_{name_b}'].values() if isinstance(v, (int, float)))
-                total_ba = sum(abs(v) for v in interaction_coeffs[f'{name_b}_to_{name_a}'].values() if isinstance(v, (int, float)))
-
-                print(f"相互作用強度:")
-                print(f"  {name_a} → {name_b}: {total_ab:.4f}")
-                print(f"  {name_b} → {name_a}: {total_ba:.4f}")
-                print(f"  非対称性: {abs(total_ab - total_ba):.4f}")
-                print(f"  結合強度: {total_ab + total_ba:.4f}")
-
-        # 因果関係の要約
-        if causality_patterns:
-            print(f"\n最強因果関係:")
-            max_causality = 0
-            max_direction = ""
-            max_lag = 0
-
-            for direction, pattern in causality_patterns.items():
-                if pattern and isinstance(pattern, dict):
-                    try:
-                        max_prob_in_pattern = max(pattern.values())
-                        if max_prob_in_pattern > max_causality:
-                            max_causality = max_prob_in_pattern
-                            max_direction = direction
-                            max_lag = max(pattern, key=pattern.get)
-                    except:
-                        continue
-
-            if max_direction:
-                print(f"  方向: {max_direction}")
-                print(f"  確率: {max_causality:.4f}")
-                print(f"  最適遅延: {max_lag}")
-
-        # 構造変化イベント統計
-        print(f"\n構造変化イベント統計:")
-        total_pos_a = np.sum(features_dict[name_a]['delta_LambdaC_pos'])
-        total_neg_a = np.sum(features_dict[name_a]['delta_LambdaC_neg'])
-        total_pos_b = np.sum(features_dict[name_b]['delta_LambdaC_pos'])
-        total_neg_b = np.sum(features_dict[name_b]['delta_LambdaC_neg'])
-
-        print(f"  {name_a}: ΔΛC⁺={total_pos_a}, ΔΛC⁻={total_neg_a}")
-        print(f"  {name_b}: ΔΛC⁺={total_pos_b}, ΔΛC⁻={total_neg_b}")
-
-        # 張力スカラー統計
-        avg_rho_a = np.mean(features_dict[name_a]['rho_T'])
-        avg_rho_b = np.mean(features_dict[name_b]['rho_T'])
-        rho_correlation = np.corrcoef(features_dict[name_a]['rho_T'],
-                                     features_dict[name_b]['rho_T'])[0, 1]
-
-        print(f"\n張力スカラー (ρT) 統計:")
-        print(f"  {name_a}: 平均={avg_rho_a:.4f}")
-        print(f"  {name_b}: 平均={avg_rho_b:.4f}")
-        print(f"  相関係数: {rho_correlation:.4f}")
-
-        print(f"{'='*60}")
-
-    except Exception as e:
-        print(f"統計サマリー生成エラー: {str(e)}")
-
-
-def plot_complete_causality_analysis(
-    causality_results: Dict[str, any],
-    series_names: List[str]
-):
-    """
-    統合因果分析結果の可視化
-    """
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-
-    name_a, name_b = series_names[0], series_names[1]
-
-    # === 1. 基本因果関係 ===
-    ax1 = axes[0, 0]
-    basic_causality = causality_results.get('basic_causality', {})
-
-    causality_colors = ['blue', 'red', 'green', 'purple', 'orange', 'brown', 'pink', 'gray']
-    color_idx = 0
-
-    for direction, pattern in basic_causality.items():
-        if pattern and isinstance(pattern, dict):
-            lags = list(pattern.keys())
-            probs = list(pattern.values())
-
-            if probs:
-                color = causality_colors[color_idx % len(causality_colors)]
-                ax1.plot(lags, probs, 'o-', label=direction.replace('_', '→'),
-                        linewidth=2, color=color, markersize=4, alpha=0.8)
-                color_idx += 1
-
-    ax1.set_title('Basic structural causation', fontsize=14, fontweight='bold')
-    ax1.set_xlabel('Lag')
-    ax1.set_ylabel('causal probability')
-    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-    ax1.grid(True, alpha=0.3)
-
-    # === 2. 階層因果関係 ===
-    ax2 = axes[0, 1]
-    hierarchical_causality = causality_results.get('hierarchical_causality', {})
-
-    if hierarchical_causality and 'causality_results' in hierarchical_causality:
-        hierarchy_results = hierarchical_causality['causality_results']
-
-        hierarchy_names = []
-        causality_values_1_to_2 = []
-        causality_values_2_to_1 = []
-
-        for hierarchy_type, results in hierarchy_results.items():
-            if isinstance(results, dict):
-                hierarchy_names.append(hierarchy_type.replace('_', ' '))
-
-                val_1_to_2 = results.get(f"{name_a}_to_{name_b}", 0)
-                val_2_to_1 = results.get(f"{name_b}_to_{name_a}", 0)
-
-                causality_values_1_to_2.append(abs(val_1_to_2))
-                causality_values_2_to_1.append(abs(val_2_to_1))
-
-        if hierarchy_names:
-            x = np.arange(len(hierarchy_names))
-            width = 0.35
-
-            bars1 = ax2.bar(x - width/2, causality_values_1_to_2, width,
-                           label=f'{name_a}→{name_b}', alpha=0.8, color='skyblue')
-            bars2 = ax2.bar(x + width/2, causality_values_2_to_1, width,
-                           label=f'{name_b}→{name_a}', alpha=0.8, color='lightcoral')
-
-            ax2.set_title('Hierarchical structural causality', fontsize=14, fontweight='bold')
-            ax2.set_xlabel('Hierarchy type')
-            ax2.set_ylabel('causal strength')
-            ax2.set_xticks(x)
-            ax2.set_xticklabels(hierarchy_names, rotation=45)
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
-    else:
-        ax2.text(0.5, 0.5, 'No hierarchical causal data', transform=ax2.transAxes,
-                ha='center', va='center', fontsize=12)
-        ax2.set_title('Hierarchical structural causality')
-
-    # === 3. 因果強度サマリー ===
-    ax3 = axes[1, 0]
-    summary = causality_results.get('summary', {})
-
-    summary_labels = ['最大因果強度', '平均因果強度', '最強因果強度']
-    summary_values = [
-        summary.get('max_causality', 0),
-        summary.get('mean_causality', 0),
-        summary.get('strongest_strength', 0)
-    ]
-
-    colors = ['lightblue', 'lightgreen', 'lightpink']
-    bars = ax3.bar(summary_labels, summary_values, color=colors, alpha=0.8)
-
-    ax3.set_title('Causal Strength Summary', fontsize=14, fontweight='bold')
-    ax3.set_ylabel('causal strength')
-    ax3.grid(True, alpha=0.3)
-
-    for bar, value in zip(bars, summary_values):
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                f'{value:.3f}', ha='center', va='bottom', fontsize=10)
-
-    # === 4. 因果方向性ネットワーク ===
-    ax4 = axes[1, 1]
-
-    # 最強因果関係の可視化
-    strongest_direction = summary.get('strongest_direction', '')
-    strongest_strength = summary.get('strongest_strength', 0)
-
-    pos_a = (0.2, 0.5)
-    pos_b = (0.8, 0.5)
-    circle_a = plt.Circle(pos_a, 0.1, color='lightblue', alpha=0.8)
-    circle_b = plt.Circle(pos_b, 0.1, color='lightcoral', alpha=0.8)
-    ax4.add_patch(circle_a)
-    ax4.add_patch(circle_b)
-    ax4.text(pos_a[0], pos_a[1], name_a, ha='center', va='center', fontweight='bold')
-    ax4.text(pos_b[0], pos_b[1], name_b, ha='center', va='center', fontweight='bold')
-
-    # 最強因果関係の矢印
-    if name_a in strongest_direction and name_b in strongest_direction:
-        if strongest_direction.find(f'{name_a}') < strongest_direction.find(f'{name_b}'):
-            # A → B
-            ax4.annotate('', xy=(pos_b[0] - 0.08, pos_b[1]),
-                        xytext=(pos_a[0] + 0.08, pos_a[1]),
-                        arrowprops=dict(arrowstyle='->', lw=max(2, strongest_strength*20),
-                                       color='blue', alpha=0.8))
-        else:
-            # B → A
-            ax4.annotate('', xy=(pos_a[0] + 0.08, pos_a[1]),
-                        xytext=(pos_b[0] - 0.08, pos_b[1]),
-                        arrowprops=dict(arrowstyle='->', lw=max(2, strongest_strength*20),
-                                       color='red', alpha=0.8))
-
-    ax4.set_xlim(0, 1)
-    ax4.set_ylim(0, 1)
-    ax4.set_title(f'Strongest causal relationship\n{strongest_direction}\nstrength: {strongest_strength:.3f}')
-    ax4.axis('off')
-
-    plt.tight_layout()
-    plt.show()
-
-def plot_comprehensive_lambda3_dashboard(
+def plot_lambda3_summary(
     results: Dict[str, any],
-    series_names: List[str]
-):
+    focus: str = 'comprehensive',
+    save_path: Optional[str] = None
+) -> None:
     """
-    Lambda³ Analytics Comprehensive Dashboard
-    Integrated visualization of all analysis results
+    Lambda³分析結果の要約可視化
+    
+    Parameters:
+    -----------
+    results : Dict
+        Lambda³分析結果
+    focus : str
+        'comprehensive', 'structural', 'interaction', 'hierarchical'
+    save_path : Optional[str]
+        保存パス（Noneの場合は表示のみ）
     """
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    fig = plt.figure(figsize=(20, 16))
-    gs = fig.add_gridspec(4, 4, hspace=0.3, wspace=0.3)
-
-    # === 1. Structural Tensor Phase Space (3D) ===
-    ax1 = fig.add_subplot(gs[0, :2], projection='3d')
-    features_dict = results['features_dict']
-    for i, name in enumerate(series_names[:2]):
-        pos_jumps = features_dict[name]['delta_LambdaC_pos']
-        neg_jumps = features_dict[name]['delta_LambdaC_neg']
-        tension = features_dict[name]['rho_T']
-        colors = plt.cm.Set1(i)
-        ax1.scatter(pos_jumps, neg_jumps, tension,
-                   c=[colors]*len(pos_jumps), s=30, alpha=0.7, label=name)
-    ax1.set_xlabel('ΔΛC⁺')
-    ax1.set_ylabel('ΔΛC⁻')
-    ax1.set_zlabel('ρT')
-    ax1.set_title('Structural Tensor Phase Space')
-    ax1.legend()
-
-    # === 2. Synchronization Network ===
-    ax2 = fig.add_subplot(gs[0, 2:])
-    sync_mat = results['sync_matrix']
-    im = ax2.imshow(sync_mat, cmap='Blues', vmin=0, vmax=1)
-    ax2.set_xticks(range(len(series_names)))
-    ax2.set_yticks(range(len(series_names)))
-    ax2.set_xticklabels(series_names, rotation=45)
-    ax2.set_yticklabels(series_names)
-    ax2.set_title('Structural Change Synchronization Matrix')
-    for i in range(len(series_names)):
-        for j in range(len(series_names)):
-            ax2.text(j, i, f'{sync_mat[i, j]:.2f}',
-                    ha="center", va="center", color="white" if sync_mat[i, j] > 0.5 else "black")
-    plt.colorbar(im, ax=ax2, fraction=0.046, pad=0.04)
-
-    # === 3. Regime Distribution ===
-    ax3 = fig.add_subplot(gs[1, :2])
-    regime_results = results.get('regime_results', {})
-    if regime_results:
-        asset_regimes = regime_results['asset_regimes']
-        regime_data = []
-        regime_labels = []
-        for asset_name, regime_info in asset_regimes.items():
-            for regime_id, label in regime_info['labels'].items():
-                stats = regime_info['detector'].regime_features[regime_id]
-                regime_data.append(stats['frequency'])
-                regime_labels.append(f"{asset_name}\n{label}")
-        colors = plt.cm.Set3(np.linspace(0, 1, len(regime_data)))
-        wedges, texts, autotexts = ax3.pie(regime_data, labels=regime_labels,
-                                          autopct='%1.1f%%', colors=colors)
-        ax3.set_title('Regime Distribution (Finance)')
-
-    # === 4. Crisis Detection ===
-    ax4 = fig.add_subplot(gs[1, 2:])
-    crisis_results = results.get('crisis_results')
-    if crisis_results:
-        aggregate_crisis = crisis_results['aggregate_crisis']
-        ax4.plot(aggregate_crisis, 'k-', linewidth=2, label='Aggregate Crisis Score')
-        ax4.axhline(y=0.8, color='r', linestyle='--', label='Crisis Threshold')
-        for start, end in crisis_results['crisis_episodes']:
-            ax4.axvspan(start, end, alpha=0.2, color='red')
-        ax4.set_title('Financial Crisis Detection')
-        ax4.set_xlabel('Time')
-        ax4.set_ylabel('Crisis Score')
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
-
-    # === 5. Hierarchical Structural Change ===
-    ax5 = fig.add_subplot(gs[2, :2])
-    hierarchical_results = results.get('hierarchical_results')
-    if hierarchical_results:
-        series_name = list(hierarchical_results.keys())[0]
-        if series_name in hierarchical_results:
-            metrics = hierarchical_results[series_name]['hierarchy_metrics']
-            metric_names = ['Local\nDominance', 'Global\nDominance',
-                           'Coupling\nStrength', 'Escalation\nRate']
-            metric_values = [
-                metrics['local_dominance'],
-                metrics['global_dominance'],
-                metrics['coupling_strength'],
-                metrics['escalation_rate']
-            ]
-            colors = ['skyblue', 'lightcoral', 'lightgreen', 'gold']
-            bars = ax5.bar(metric_names, metric_values, color=colors, alpha=0.8)
-            ax5.set_title(f'{series_name}: Hierarchy Metrics')
-            ax5.set_ylabel('Metric Value')
-            ax5.grid(True, alpha=0.3)
-            for bar, value in zip(bars, metric_values):
-                height = bar.get_height()
-                ax5.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                        f'{value:.3f}', ha='center', va='bottom')
-
-    # === 6. Pairwise Interaction ===
-    ax6 = fig.add_subplot(gs[2, 2:])
-    pairwise_results = results.get('pairwise_results')
-    if pairwise_results:
-        # 非対称分析の場合と通常分析の場合を分けて処理
-        if 'asymmetric_results' in pairwise_results:
-            # 非対称分析の結果構造
-            interaction_coeffs = pairwise_results['asymmetric_results']['interaction_coefficients']
-        elif 'interaction_coefficients' in pairwise_results:
-            # 通常分析の結果構造
-            interaction_coeffs = pairwise_results['interaction_coefficients']
+    visualizer = Lambda3Visualizer()
+    
+    if focus == 'comprehensive':
+        fig = visualizer.plot_lambda3_core_dashboard(results)
+    elif focus == 'structural':
+        fig = visualizer.plot_structural_tensor_evolution(
+            results['features_dict'], 
+            results['series_names']
+        )
+    elif focus == 'interaction':
+        if 'pairwise_results' in results:
+            fig = visualizer.plot_interaction_network(
+                results['pairwise_results'],
+                results['series_names']
+            )
         else:
-            interaction_coeffs = None
-            
-        if interaction_coeffs:
-            if 'cross_effects' in interaction_coeffs:
-                cross_effects = interaction_coeffs['cross_effects']
-                directions = list(cross_effects.keys())
-                pos_effects = [cross_effects[d]['pos_jump'] for d in directions]
-                neg_effects = [cross_effects[d]['neg_jump'] for d in directions]
-                tension_effects = [cross_effects[d]['tension'] for d in directions]
-            else:
-                # 直接的な相互作用係数の場合
-                directions = [k for k in interaction_coeffs.keys() if '_to_' in k]
-                pos_effects = [interaction_coeffs[d].get('pos_jump', 0) for d in directions]
-                neg_effects = [interaction_coeffs[d].get('neg_jump', 0) for d in directions]
-                tension_effects = [interaction_coeffs[d].get('tension', 0) for d in directions]
-            
-            if directions:
-                x = np.arange(len(directions))
-                width = 0.25
-                ax6.bar(x - width, pos_effects, width, label='Pos Jump', alpha=0.8)
-                ax6.bar(x, neg_effects, width, label='Neg Jump', alpha=0.8)
-                ax6.bar(x + width, tension_effects, width, label='Tension', alpha=0.8)
-                ax6.set_title('Pairwise Interaction Coefficients')
-                ax6.set_xticks(x)
-                ax6.set_xticklabels([d.replace('_to_', '→') for d in directions], rotation=45)
-                ax6.legend()
-                ax6.grid(True, alpha=0.3)
-            else:
-                ax6.text(0.5, 0.5, 'No interaction data available', 
-                        transform=ax6.transAxes, ha='center', va='center')
-                ax6.set_title('Pairwise Interaction Coefficients')
+            print("No interaction results available")
+            return
+    elif focus == 'hierarchical':
+        if 'hierarchical_results' in results:
+            fig = visualizer.plot_hierarchical_dynamics(
+                results['hierarchical_results']
+            )
         else:
-            ax6.text(0.5, 0.5, 'No interaction coefficients available', 
-                    transform=ax6.transAxes, ha='center', va='center')
-            ax6.set_title('Pairwise Interaction Coefficients')
+            print("No hierarchical results available")
+            return
+            
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
+        
+    plt.close()
 
-    # === 7. Structural Change Event Timeline ===
-    ax7 = fig.add_subplot(gs[3, :])
-    for i, name in enumerate(series_names[:3]):  # Show up to 3 series
-        if name in features_dict:
+def quick_lambda3_plot(
+    features_dict: Dict[str, Dict[str, np.ndarray]],
+    series_names: List[str],
+    plot_type: str = 'pulsation'
+) -> None:
+    """
+    Lambda³特徴量の簡易可視化
+    
+    Parameters:
+    -----------
+    features_dict : Dict
+        特徴量辞書
+    series_names : List[str]
+        系列名リスト
+    plot_type : str
+        'pulsation', 'tension', 'phase_space'
+    """
+    if plot_type == 'pulsation':
+        fig, ax = plt.subplots(figsize=(14, 6))
+        
+        for i, name in enumerate(series_names):
+            y_offset = i * 0.5
             pos_events = np.where(features_dict[name]['delta_LambdaC_pos'] > 0)[0]
             neg_events = np.where(features_dict[name]['delta_LambdaC_neg'] > 0)[0]
-            y_pos = 1 - i * 0.3
-            ax7.scatter(pos_events, [y_pos] * len(pos_events),
-                       c='blue', marker='^', s=50, alpha=0.7, label=f'{name} ΔΛC⁺')
-            ax7.scatter(neg_events, [y_pos - 0.1] * len(neg_events),
-                       c='red', marker='v', s=50, alpha=0.7, label=f'{name} ΔΛC⁻')
-    ax7.set_title('Structural Change Event Timeline')
-    ax7.set_xlabel('Time')
-    ax7.set_ylabel('Series')
-    ax7.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    ax7.grid(True, alpha=0.3)
-
-    plt.suptitle('Lambda³ Analytics Comprehensive Dashboard', fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    plt.show()
-
-def plot_multi_scale_analysis(
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    series_names: List[str],
-    scales: List[int] = [5, 10, 20, 50]
-):
-    """
-    Multi-Scale Structural Tensor Analysis
-    Visualize structural change patterns at different temporal scales.
-    """
-    fig, axes = plt.subplots(len(scales), len(series_names),
-                            figsize=(5*len(series_names), 4*len(scales)))
-
-    if len(series_names) == 1:
-        axes = axes.reshape(-1, 1)
-    if len(scales) == 1:
-        axes = axes.reshape(1, -1)
-
-    for i, scale in enumerate(scales):
-        for j, name in enumerate(series_names):
-            ax = axes[i, j]
-            # Structure change detection for each scale
-            data = features_dict[name]['data']
-            # Smoothing with moving average
-            if len(data) > scale:
-                smoothed_data = np.convolve(data, np.ones(scale)/scale, mode='valid')
-                # Structure change detection per scale
-                diff = np.diff(smoothed_data)
-                threshold = np.percentile(np.abs(diff), 95)
-                pos_changes = np.where(diff > threshold)[0]
-                neg_changes = np.where(diff < -threshold)[0]
-                # Visualization
-                time_axis = np.arange(len(smoothed_data))
-                ax.plot(time_axis, smoothed_data, 'k-', alpha=0.7, linewidth=1)
-                ax.scatter(pos_changes, smoothed_data[pos_changes],
-                          c='blue', marker='^', s=30, alpha=0.8)
-                ax.scatter(neg_changes, smoothed_data[neg_changes],
-                          c='red', marker='v', s=30, alpha=0.8)
-            ax.set_title(f'{name} (Scale: {scale})')
-            ax.grid(True, alpha=0.3)
-            if i == len(scales) - 1:
-                ax.set_xlabel('Time')
-            if j == 0:
-                ax.set_ylabel(f'Scale {scale}')
-    plt.suptitle('Multi-Scale Structural Change Analysis', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    plt.show()
-
-def plot_dynamic_correlation_heatmap(
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    series_names: List[str],
-    window: int = 50
-):
-    """
-    Dynamic Correlation Heatmap
-    Visualize evolution of correlation over time windows.
-    """
-    n_series = len(series_names)
-    data_length = len(features_dict[series_names[0]]['rho_T'])
-    n_windows = data_length - window + 1
-    correlation_evolution = np.zeros((n_windows, n_series, n_series))
-    for t in range(n_windows):
-        window_data = []
+            
+            ax.scatter(pos_events, [y_offset] * len(pos_events),
+                      marker='^', s=100, c='red', alpha=0.7, label=f'{name} ΔΛC⁺' if i == 0 else '')
+            ax.scatter(neg_events, [y_offset] * len(neg_events),
+                      marker='v', s=100, c='blue', alpha=0.7, label=f'{name} ΔΛC⁻' if i == 0 else '')
+                      
+        ax.set_yticks([i * 0.5 for i in range(len(series_names))])
+        ax.set_yticklabels(series_names)
+        ax.set_xlabel('Structural Time τ')
+        ax.set_title('ΔΛC Pulsation Pattern')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+    elif plot_type == 'tension':
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
         for name in series_names:
-            rho_t = features_dict[name]['rho_T'][t:t+window]
-            window_data.append(rho_t)
-        correlation_matrix = np.corrcoef(window_data)
-        correlation_evolution[t] = correlation_matrix
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    # === 1. Initial correlation ===
-    ax1 = axes[0, 0]
-    im1 = ax1.imshow(correlation_evolution[0], cmap='RdBu', vmin=-1, vmax=1)
-    ax1.set_title('Initial Correlation (t=0)')
-    ax1.set_xticks(range(n_series))
-    ax1.set_yticks(range(n_series))
-    ax1.set_xticklabels(series_names)
-    ax1.set_yticklabels(series_names)
-    plt.colorbar(im1, ax=ax1)
-    # === 2. Final correlation ===
-    ax2 = axes[0, 1]
-    im2 = ax2.imshow(correlation_evolution[-1], cmap='RdBu', vmin=-1, vmax=1)
-    ax2.set_title(f'Final Correlation (t={n_windows-1})')
-    ax2.set_xticks(range(n_series))
-    ax2.set_yticks(range(n_series))
-    ax2.set_xticklabels(series_names)
-    ax2.set_yticklabels(series_names)
-    plt.colorbar(im2, ax=ax2)
-    # === 3. Correlation change ===
-    ax3 = axes[1, 0]
-    correlation_change = correlation_evolution[-1] - correlation_evolution[0]
-    im3 = ax3.imshow(correlation_change, cmap='RdBu', vmin=-1, vmax=1)
-    ax3.set_title('Correlation Change (Final - Initial)')
-    ax3.set_xticks(range(n_series))
-    ax3.set_yticks(range(n_series))
-    ax3.set_xticklabels(series_names)
-    ax3.set_yticklabels(series_names)
-    plt.colorbar(im3, ax=ax3)
-    # === 4. Correlation evolution over time ===
-    ax4 = axes[1, 1]
-    for i in range(n_series):
-        for j in range(i+1, n_series):
-            correlation_series = correlation_evolution[:, i, j]
-            ax4.plot(correlation_series, label=f'{series_names[i]}-{series_names[j]}')
-    ax4.set_title('Correlation Evolution')
-    ax4.set_xlabel('Window (time)')
-    ax4.set_ylabel('Correlation Coefficient')
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-def plot_structural_coherence_analysis(
-    features_dict: Dict[str, Dict[str, np.ndarray]],
-    series_names: List[str]
-):
-    """
-    Structural Coherence Analysis
-    Measures and visualizes consistency of structural changes across series.
-    """
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-
-    # === 1. Structural Change Synchrony ===
-    ax1 = axes[0, 0]
-    synchrony_matrix = np.zeros((len(series_names), len(series_names)))
-    for i, name_a in enumerate(series_names):
-        for j, name_b in enumerate(series_names):
-            if i != j:
-                events_a = (features_dict[name_a]['delta_LambdaC_pos'] +
-                           features_dict[name_a]['delta_LambdaC_neg'])
-                events_b = (features_dict[name_b]['delta_LambdaC_pos'] +
-                           features_dict[name_b]['delta_LambdaC_neg'])
-                synchrony = np.mean(events_a * events_b)
-                synchrony_matrix[i, j] = synchrony
-            else:
-                synchrony_matrix[i, j] = 1.0
-    im1 = ax1.imshow(synchrony_matrix, cmap='Blues', vmin=0)
-    ax1.set_title('Structural Change Synchrony')
-    ax1.set_xticks(range(len(series_names)))
-    ax1.set_yticks(range(len(series_names)))
-    ax1.set_xticklabels(series_names)
-    ax1.set_yticklabels(series_names)
-    plt.colorbar(im1, ax=ax1)
-
-    # === 2. Tension Scalar Coherence ===
-    ax2 = axes[0, 1]
-    tension_coherence = np.zeros((len(series_names), len(series_names)))
-    for i, name_a in enumerate(series_names):
-        for j, name_b in enumerate(series_names):
-            if i != j:
-                rho_a = features_dict[name_a]['rho_T']
-                rho_b = features_dict[name_b]['rho_T']
-                correlation = np.corrcoef(rho_a, rho_b)[0, 1]
-                tension_coherence[i, j] = correlation
-            else:
-                tension_coherence[i, j] = 1.0
-    im2 = ax2.imshow(tension_coherence, cmap='RdBu', vmin=-1, vmax=1)
-    ax2.set_title('Tension Scalar Coherence')
-    ax2.set_xticks(range(len(series_names)))
-    ax2.set_yticks(range(len(series_names)))
-    ax2.set_xticklabels(series_names)
-    ax2.set_yticklabels(series_names)
-    plt.colorbar(im2, ax=ax2)
-
-    # === 3. Structural Diversity Index ===
-    ax3 = axes[1, 0]
-    diversity_metrics = []
-    metric_names = []
-    for name in series_names:
-        pos_events = np.sum(features_dict[name]['delta_LambdaC_pos'])
-        neg_events = np.sum(features_dict[name]['delta_LambdaC_neg'])
-        total_events = pos_events + neg_events
-        # Shannon entropy for event diversity
-        if total_events > 0:
-            p_pos = pos_events / total_events
-            p_neg = neg_events / total_events
-            entropy = 0
-            if p_pos > 0:
-                entropy -= p_pos * np.log2(p_pos)
-            if p_neg > 0:
-                entropy -= p_neg * np.log2(p_neg)
-            diversity_metrics.append(entropy)
-        else:
-            diversity_metrics.append(0)
-        metric_names.append(name)
-    bars = ax3.bar(metric_names, diversity_metrics, alpha=0.8, color='lightgreen')
-    ax3.set_title('Structural Diversity Index (Shannon Entropy)')
-    ax3.set_ylabel('Entropy')
-    ax3.tick_params(axis='x', rotation=45)
-    ax3.grid(True, alpha=0.3)
-    for bar, value in zip(bars, diversity_metrics):
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                f'{value:.3f}', ha='center', va='bottom')
-
-    # === 4. Integrated Coherence Score ===
-    ax4 = axes[1, 1]
-    coherence_scores = []
-    for i, name in enumerate(series_names):
-        avg_synchrony = np.mean([synchrony_matrix[i, j] for j in range(len(series_names)) if i != j])
-        avg_tension_corr = np.mean([abs(tension_coherence[i, j]) for j in range(len(series_names)) if i != j])
-        coherence_score = (avg_synchrony + avg_tension_corr) / 2
-        coherence_scores.append(coherence_score)
-    colors = plt.cm.viridis(np.linspace(0, 1, len(series_names)))
-    bars = ax4.bar(series_names, coherence_scores, color=colors, alpha=0.8)
-    ax4.set_title('Integrated Structural Coherence Score')
-    ax4.set_ylabel('Coherence Score')
-    ax4.tick_params(axis='x', rotation=45)
-    ax4.grid(True, alpha=0.3)
-    for bar, value in zip(bars, coherence_scores):
-        height = bar.get_height()
-        ax4.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                f'{value:.3f}', ha='center', va='bottom')
-
+            ax.plot(features_dict[name]['rho_T'], label=name, alpha=0.8)
+            
+        ax.set_xlabel('Structural Time τ')
+        ax.set_ylabel('Tension Scalar ρT')
+        ax.set_title('Tension Evolution')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+    elif plot_type == 'phase_space':
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        for i, name in enumerate(series_names):
+            colors = plt.cm.Set1(i)
+            ax.scatter(
+                features_dict[name]['delta_LambdaC_pos'],
+                features_dict[name]['delta_LambdaC_neg'],
+                features_dict[name]['rho_T'],
+                c=[colors], s=30, alpha=0.6, label=name
+            )
+            
+        ax.set_xlabel('ΔΛC⁺')
+        ax.set_ylabel('ΔΛC⁻')
+        ax.set_zlabel('ρT')
+        ax.set_title('Structural Tensor Phase Space')
+        ax.legend()
+        
     plt.tight_layout()
     plt.show()
 
@@ -3574,7 +3028,7 @@ def main_lambda3_rapid_analysis(
     return results
 
 # ===============================
-# SECTION 15: EXECUTION AND MAIN
+# SECTION 12: EXECUTION AND MAIN
 # ===============================
 
 if __name__ == '__main__':
