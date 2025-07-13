@@ -1,5 +1,5 @@
 # ==========================================================
-# Λ³ABC: Lambda³ Analytics for Bayes & CausalJunction
+# lambda3_zeroshot_tensor_field
 # ----------------------------------------------------
 # Refactored Framework for Structural Tensor Analysis
 # No time causality - structural pulsations (∆ΛC)
