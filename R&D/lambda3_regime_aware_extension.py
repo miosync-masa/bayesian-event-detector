@@ -251,6 +251,7 @@ class HierarchicalRegimeDetector:
             start = max(0, i - window + 1)
             end = i + 1
             subset = data[start:end]
+            subset_len = end - start  # ← この行が抜けていました！
             
             if subset_len > 1:
                 mean = np.mean(subset)
@@ -271,8 +272,12 @@ class HierarchicalRegimeDetector:
         for i in range(n):
             start = max(0, i - window + 1)
             end = i + 1
-            result[i] = np.mean(data[start:end])
-            
+            subset_len = end - start  # ← この行も追加！
+            if subset_len > 0:
+                result[i] = np.mean(data[start:end])
+            else:
+                result[i] = 0.0
+                
         return result
     
     def _smooth_regime_transitions(self, regimes: np.ndarray, window: int) -> np.ndarray:
