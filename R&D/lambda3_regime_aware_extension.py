@@ -1,12 +1,12 @@
 # ==========================================================
-# Λ³ Regime-Aware Bayesian Extension
+# Λ³ Regime-Aware Bayesian Extension (Modified)
 # ----------------------------------------------------
-# Hierarchical regime detection and regime-specific Bayesian inference
-# For financial market structural analysis
+# Pairwise regime detection and regime-specific Bayesian inference
+# Based on WeatherAnalysis_ny.py implementation pattern
 #
 # Author: Extension for lambda3_zeroshot_tensor_field.py
 # License: MIT
-# Version: 1.0 (Regime-Aware)
+# Version: 2.0 (Pairwise Regime)
 # ==========================================================
 
 import numpy as np
@@ -20,713 +20,659 @@ from sklearn.mixture import GaussianMixture
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import chi2
+from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 import seaborn as sns
 from numba import jit, njit
 
-# Import from main Lambda³ module (will be lambda3_zeroshot_tensor_field)
-# from lambda3_zeroshot_tensor_field import (
-#     L3Config, calc_lambda3_features, Lambda3BayesianLogger,
-#     fit_l3_pairwise_bayesian_system, extract_interaction_coefficients
-# )
+# Import from main Lambda³ module
+from lambda3_zeroshot_tensor_field import (
+    L3Config, calc_lambda3_features, Lambda3BayesianLogger,
+    fit_l3_pairwise_bayesian_system, extract_interaction_coefficients,
+    fit_l3_bayesian_regression_asymmetric
+)
 
 # ===============================
-# HIERARCHICAL REGIME CONFIGURATION
+# REGIME CONFIGURATION
 # ===============================
 @dataclass
-class HierarchicalRegimeConfig:
-    """Configuration for hierarchical regime detection"""
-    # Global market regime settings
-    n_global_regimes: int = 3  # Bull/Neutral/Bear
-    global_regime_names: List[str] = field(default_factory=lambda: ['Bull', 'Neutral', 'Bear'])
+class RegimeConfig:
+    """Configuration for pairwise regime detection"""
+    # Regime detection parameters
+    n_regimes: int = 3  # Number of regimes per pair
+    regime_names: Optional[List[str]] = None  # Custom regime names
     
-    # Pair-specific sub-regime settings
-    n_sub_regimes: int = 2  # Sub-regimes within each global regime
-    enable_sub_regimes: bool = True
-    
-    # Detection parameters
+    # Detection settings
     min_regime_size: int = 30  # Minimum points for valid regime
     regime_overlap_window: int = 5  # Transition smoothing window
-    use_gmm: bool = True  # Use Gaussian Mixture Model vs K-means
+    use_adaptive_detection: bool = True  # Use adaptive detection
+    detection_method: str = 'auto'  # 'auto', 'kmeans', 'gmm'
     
-    # Regime stability criteria
-    stability_threshold: float = 0.7  # Minimum probability for regime assignment
-    transition_penalty: float = 0.1  # Penalty for frequent transitions
+    # Temporal hints
+    use_temporal_hint: bool = True  # Use time information for initialization
     
-    # Feature selection for regime detection
-    use_market_features: bool = True  # Include market-wide features
-    use_technical_indicators: bool = True  # Include RSI, volatility ratios
+    # Quality scoring
+    score_method: str = 'entropy'  # Method for evaluating clustering quality
     
-    # Bayesian settings per regime
-    regime_specific_priors: bool = True  # Different priors for each regime
-    adaptive_sampling: bool = True  # Adjust MCMC parameters by regime size
+    # Bayesian settings
+    regime_specific_sampling: bool = True  # Adjust MCMC by regime
+    adaptive_priors: bool = False  # Use regime-specific priors (optional)
 
 # ===============================
-# HIERARCHICAL REGIME DETECTOR
+# ADAPTIVE PAIRWISE REGIME DETECTOR
 # ===============================
-class HierarchicalRegimeDetector:
+class AdaptivePairwiseRegimeDetector:
     """
-    Lambda³ Hierarchical Regime Detection for Financial Markets
-    Detects global market regimes and pair-specific sub-regimes
+    Adaptive regime detection for pairwise Lambda³ analysis.
+    Based on WeatherAnalysis_ny.py implementation.
     """
     
-    def __init__(self, config: HierarchicalRegimeConfig):
+    def __init__(self, config: RegimeConfig):
         self.config = config
-        self.global_regimes = None
-        self.global_regime_model = None
-        self.sub_regime_models = {}
-        self.regime_features = {}
-        self.transition_matrix = None
+        self.regime_labels = None
+        self.regime_features = None
+        self.detection_method_used = None
         
-    def detect_global_market_regimes(
+    def detect_pairwise_regimes(
         self,
-        features_dict: Dict[str, Dict[str, np.ndarray]],
-        market_indicators: Optional[Dict[str, np.ndarray]] = None
+        features_a: Dict[str, np.ndarray],
+        features_b: Dict[str, np.ndarray],
+        pair_name: Tuple[str, str],
+        temporal_hint: Optional[np.ndarray] = None
     ) -> np.ndarray:
         """
-        Detect global market regimes using all series
+        Detect structural regimes for a specific pair.
         
-        Lambda³ principle: Market-wide structural states (Λ_market)
-        represent coherent phases of the entire financial system
+        Lambda³: Pair-specific structural states in semantic space
         """
-        print("\n" + "="*60)
-        print("GLOBAL MARKET REGIME DETECTION")
-        print("="*60)
+        print(f"\nDetecting {self.config.n_regimes} structural regimes for {pair_name[0]} ⇄ {pair_name[1]}...")
         
-        # Extract market-wide features
-        market_features = self._extract_market_wide_features(features_dict, market_indicators)
+        # Combine features from both series
+        combined_features = self._combine_pairwise_features(features_a, features_b)
         
-        # Normalize features
-        scaler = StandardScaler()
-        features_scaled = scaler.fit_transform(market_features)
+        # Create temporal hint if enabled
+        if self.config.use_temporal_hint and temporal_hint is None:
+            temporal_hint = features_a.get('time_trend', np.arange(len(features_a['data'])))
         
         # Detect regimes
-        if self.config.use_gmm:
-            print("Using Gaussian Mixture Model for regime detection...")
-            model = GaussianMixture(
-                n_components=self.config.n_global_regimes,
-                covariance_type='full',
-                n_init=10,
-                max_iter=200,
-                random_state=42
-            )
-            regimes = model.fit_predict(features_scaled)
-            probabilities = model.predict_proba(features_scaled)
-            
-            # Apply stability threshold
-            max_probs = np.max(probabilities, axis=1)
-            unstable_mask = max_probs < self.config.stability_threshold
-            
-            # Store model for later use
-            self.global_regime_model = model
-            
+        if self.config.use_adaptive_detection and self.config.detection_method == 'auto':
+            regimes = self._auto_select_method(combined_features, temporal_hint)
         else:
-            print("Using K-means for regime detection...")
-            model = KMeans(
-                n_clusters=self.config.n_global_regimes,
-                n_init=20,
-                random_state=42
-            )
-            regimes = model.fit_predict(features_scaled)
-            unstable_mask = np.zeros(len(regimes), dtype=bool)
-            self.global_regime_model = model
+            method = self.config.detection_method if self.config.detection_method != 'auto' else 'kmeans'
+            regimes = self._detect_with_method(combined_features, temporal_hint, method)
+            self.detection_method_used = method
         
         # Post-process: smooth transitions
-        regimes = self._smooth_regime_transitions(regimes, self.config.regime_overlap_window)
+        regimes = self._smooth_regime_transitions(regimes)
         
         # Calculate regime statistics
-        self._calculate_global_regime_statistics(regimes, features_dict)
+        self._calculate_regime_statistics(regimes, features_a, features_b)
         
-        # Relabel regimes based on characteristics
-        regimes = self._relabel_regimes_by_characteristics(regimes, features_dict)
-        
-        self.global_regimes = regimes
+        self.regime_labels = regimes
         
         # Print summary
         unique, counts = np.unique(regimes, return_counts=True)
-        print("\nGlobal Market Regime Distribution:")
-        for r, count in zip(unique, counts):
-            regime_name = self.config.global_regime_names[r]
-            print(f"  {regime_name}: {count} periods ({count/len(regimes)*100:.1f}%)")
-        
-        # Calculate transition matrix
-        self.transition_matrix = self._calculate_transition_matrix(regimes)
+        print(f"  Regime distribution: {dict(zip(unique, counts))}")
         
         return regimes
     
-   
-    def _extract_market_wide_features(
+    def _combine_pairwise_features(
         self,
-        features_dict: Dict[str, Dict[str, np.ndarray]],
-        market_indicators: Optional[Dict[str, np.ndarray]] = None
+        features_a: Dict[str, np.ndarray],
+        features_b: Dict[str, np.ndarray]
     ) -> np.ndarray:
-        """Extract features that capture market-wide structural state"""
+        """Combine features from both series for regime detection"""
         
+        # Stack relevant features
         feature_list = []
         
-        # 1. Aggregate structural changes across all series
-        all_pos_jumps = []
-        all_neg_jumps = []
-        all_tensions = []
+        # Individual series features
+        for features in [features_a, features_b]:
+            if 'delta_LambdaC_pos' in features:
+                feature_list.append(features['delta_LambdaC_pos'])
+            if 'delta_LambdaC_neg' in features:
+                feature_list.append(features['delta_LambdaC_neg'])
+            if 'rho_T' in features:
+                feature_list.append(features['rho_T'])
         
-        for name, features in features_dict.items():
-            all_pos_jumps.append(features['delta_LambdaC_pos'])
-            all_neg_jumps.append(features['delta_LambdaC_neg'])
-            all_tensions.append(features['rho_T'])
-        
-        # Market-wide jump intensity
-        market_pos_jumps = np.mean(all_pos_jumps, axis=0)
-        market_neg_jumps = np.mean(all_neg_jumps, axis=0)
-        
-        # Market-wide tension (average and dispersion)
-        market_tension_mean = np.mean(all_tensions, axis=0)
-        market_tension_std = np.std(all_tensions, axis=0)
-        
-        # Jump asymmetry
-        jump_asymmetry = market_pos_jumps - market_neg_jumps
-        
-        # Synchronization measure (how many series jump together)
-        jump_sync = np.sum(all_pos_jumps, axis=0) + np.sum(all_neg_jumps, axis=0)
-        
-        feature_list.extend([
-            market_pos_jumps,
-            market_neg_jumps,
-            market_tension_mean,
-            market_tension_std,
-            jump_asymmetry,
-            jump_sync
-        ])
-        
-        # 2. Rolling statistics (different time scales)
-        windows = [5, 20, 50]
-        for w in windows:
-            # Rolling volatility ratio - FIXED: ensure array is passed
-            if isinstance(market_tension_mean, np.ndarray) and len(market_tension_mean) > 0:
-                rolling_vol = self._rolling_std(market_tension_mean, w)
-                feature_list.append(rolling_vol)
-            else:
-                # If market_tension_mean is scalar or empty, create dummy array
-                dummy_array = np.zeros(len(all_tensions[0]) if all_tensions else 100)
-                feature_list.append(dummy_array)
-            
-            # Rolling jump frequency - FIXED: ensure array is passed
-            jump_combined = market_pos_jumps + market_neg_jumps
-            if isinstance(jump_combined, np.ndarray) and len(jump_combined) > 0:
-                rolling_jumps = self._rolling_mean(jump_combined, w)
-                feature_list.append(rolling_jumps)
-            else:
-                dummy_array = np.zeros(len(all_tensions[0]) if all_tensions else 100)
-                feature_list.append(dummy_array)
-        
-        # 3. Market indicators if provided
-        if market_indicators is not None:
-            if 'vix' in market_indicators:
-                feature_list.append(market_indicators['vix'])
-            if 'dollar_index' in market_indicators:
-                feature_list.append(market_indicators['dollar_index'])
-            if 'term_spread' in market_indicators:
-                feature_list.append(market_indicators['term_spread'])
-        
-        # 4. Cross-series correlations (market coherence)
-        if len(features_dict) > 1:
-            # Calculate pairwise tension correlations
-            corr_window = 20
+        # Cross-correlation features
+        if len(features_a['rho_T']) > 20:
+            window = 20
             correlations = []
-            
-            series_length = len(all_tensions[0]) if all_tensions else 0
-            
-            for i in range(max(0, series_length - corr_window)):
-                window_tensors = [t[i:i+corr_window] for t in all_tensions]
-                # Average pairwise correlation in this window
-                if len(window_tensors) > 1 and all(len(wt) == corr_window for wt in window_tensors):
-                    corr_matrix = np.corrcoef(window_tensors)
-                    avg_corr = (corr_matrix.sum() - len(corr_matrix)) / (len(corr_matrix) * (len(corr_matrix) - 1))
-                    correlations.append(avg_corr)
-                else:
-                    correlations.append(0.0)
+            for i in range(len(features_a['rho_T']) - window):
+                corr = np.corrcoef(
+                    features_a['rho_T'][i:i+window],
+                    features_b['rho_T'][i:i+window]
+                )[0, 1]
+                correlations.append(corr)
             
             # Pad to match length
-            if correlations and series_length > 0:
-                correlations = np.pad(correlations, (0, series_length - len(correlations)), 'edge')
-                feature_list.append(np.array(correlations))
-            else:
-                dummy_array = np.zeros(series_length if series_length > 0 else 100)
-                feature_list.append(dummy_array)
+            correlations = np.pad(correlations, (0, len(features_a['rho_T']) - len(correlations)), 'edge')
+            feature_list.append(correlations)
         
-        # Stack all features - ensure all are arrays with same length
-        if feature_list:
-            # Find the common length
-            lengths = [len(f) if isinstance(f, np.ndarray) else 1 for f in feature_list]
-            common_length = max(lengths)
+        # Stack and normalize
+        X = np.column_stack(feature_list)
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        return X_scaled
+    
+    def _auto_select_method(
+        self,
+        features: np.ndarray,
+        temporal_hint: Optional[np.ndarray]
+    ) -> np.ndarray:
+        """Automatically select best detection method"""
+        
+        print("  Using adaptive detection with automatic method selection...")
+        
+        methods_to_try = ['gmm', 'kmeans']
+        best_method = None
+        best_score = -np.inf
+        best_regimes = None
+        
+        for method in methods_to_try:
+            print(f"    Trying {method}...")
             
-            # Ensure all features have the same length
-            aligned_features = []
-            for f in feature_list:
-                if isinstance(f, np.ndarray):
-                    if len(f) == common_length:
-                        aligned_features.append(f)
-                    else:
-                        # Pad or truncate to common length
-                        if len(f) < common_length:
-                            padded = np.pad(f, (0, common_length - len(f)), 'edge')
-                            aligned_features.append(padded)
-                        else:
-                            aligned_features.append(f[:common_length])
-                else:
-                    # Convert scalar to array
-                    aligned_features.append(np.full(common_length, f))
+            regimes = self._detect_with_method(features, temporal_hint, method)
+            score = self._evaluate_clustering_quality(regimes, features)
             
-            features = np.column_stack(aligned_features)
+            # Display distribution
+            unique, counts = np.unique(regimes, return_counts=True)
+            print(f"      Score: {score:.3f}, Distribution: {dict(zip(unique, counts))}")
+            
+            if score > best_score:
+                best_score = score
+                best_method = method
+                best_regimes = regimes
+        
+        print(f"  Selected method: {best_method} (score: {best_score:.3f})")
+        self.detection_method_used = best_method
+        
+        return best_regimes
+    
+    def _detect_with_method(
+        self,
+        features: np.ndarray,
+        temporal_hint: Optional[np.ndarray],
+        method: str
+    ) -> np.ndarray:
+        """Detect regimes using specified method"""
+        
+        if method == 'kmeans' and temporal_hint is not None:
+            # Use temporal information for better initialization
+            n_points = len(features)
+            init_centers = []
+            
+            # Divide data into temporal segments
+            for i in range(self.config.n_regimes):
+                start_idx = int(i * n_points / self.config.n_regimes)
+                end_idx = int((i + 1) * n_points / self.config.n_regimes)
+                segment_mean = np.mean(features[start_idx:end_idx], axis=0)
+                init_centers.append(segment_mean)
+            
+            init_centers = np.array(init_centers)
+            
+            # K-means with temporal initialization
+            km = KMeans(
+                n_clusters=self.config.n_regimes,
+                init=init_centers,
+                n_init=1,
+                random_state=42
+            )
+            labels = km.fit_predict(features)
+            
+        elif method == 'gmm':
+            # Gaussian Mixture Model
+            gmm = GaussianMixture(
+                n_components=self.config.n_regimes,
+                covariance_type='full',
+                n_init=10,
+                random_state=42
+            )
+            labels = gmm.fit_predict(features)
+            
         else:
-            # Fallback: create dummy features
-            features = np.random.randn(100, 6)
+            # Default k-means
+            km = KMeans(
+                n_clusters=self.config.n_regimes,
+                init='k-means++',
+                n_init=20,
+                random_state=42
+            )
+            labels = km.fit_predict(features)
         
-        print(f"Extracted {features.shape[1]} market-wide features with {features.shape[0]} time points")
+        # Post-process: merge small regimes
+        labels = self._merge_small_regimes(labels)
         
-        return features
+        return labels
     
-    @staticmethod
-    def _rolling_std(data: Union[np.ndarray, float], window: int) -> np.ndarray:
-        """Rolling standard deviation with input validation (non-JIT version)"""
-        # Input validation
-        if isinstance(data, (int, float)):
-            # If scalar, return array of zeros
-            return np.zeros(1)
+    def _evaluate_clustering_quality(
+        self,
+        labels: np.ndarray,
+        features: np.ndarray
+    ) -> float:
+        """Evaluate clustering quality"""
         
-        if not isinstance(data, np.ndarray):
-            data = np.array(data)
+        unique, counts = np.unique(labels, return_counts=True)
+        proportions = counts / len(labels)
         
-        if data.ndim == 0:  # scalar array
-            return np.zeros(1)
+        if self.config.score_method == 'entropy':
+            # Entropy-based score
+            entropy = -np.sum(proportions * np.log(proportions + 1e-10))
+            imbalance_penalty = np.std(proportions) * 2
+            score = entropy - imbalance_penalty
+        else:
+            # Silhouette score
+            from sklearn.metrics import silhouette_score
+            try:
+                score = silhouette_score(features, labels)
+            except:
+                score = -1.0
         
-        n = len(data)
-        result = np.empty(n)
-        
-        for i in range(n):
-            start = max(0, i - window + 1)
-            end = i + 1
-            subset = data[start:end]
-            
-            if len(subset) > 1:
-                result[i] = np.std(subset)
-            else:
-                result[i] = 0.0
-                
-        return result
+        return score
     
-    @staticmethod
-    def _rolling_mean(data: Union[np.ndarray, float], window: int) -> np.ndarray:
-        """Rolling mean with input validation (non-JIT version)"""
-        # Input validation
-        if isinstance(data, (int, float)):
-            # If scalar, return array with that value
-            return np.array([data])
+    def _merge_small_regimes(self, labels: np.ndarray) -> np.ndarray:
+        """Merge regimes smaller than minimum size"""
         
-        if not isinstance(data, np.ndarray):
-            data = np.array(data)
+        unique_labels, counts = np.unique(labels, return_counts=True)
         
-        if data.ndim == 0:  # scalar array
-            return np.array([data.item()])
+        for label, count in zip(unique_labels, counts):
+            if count < self.config.min_regime_size:
+                # Find nearest large regime
+                mask = labels == label
+                if np.any(mask):
+                    # Reassign to most common neighboring regime
+                    for i in np.where(mask)[0]:
+                        # Look at neighbors
+                        window = 10
+                        start = max(0, i - window)
+                        end = min(len(labels), i + window + 1)
+                        neighbor_labels = labels[start:end]
+                        neighbor_labels = neighbor_labels[neighbor_labels != label]
+                        if len(neighbor_labels) > 0:
+                            most_common = np.bincount(neighbor_labels).argmax()
+                            labels[i] = most_common
         
-        n = len(data)
-        result = np.empty(n)
-        
-        for i in range(n):
-            start = max(0, i - window + 1)
-            end = i + 1
-            result[i] = np.mean(data[start:end])
-                
-        return result
+        return labels
     
-    def _smooth_regime_transitions(self, regimes: np.ndarray, window: int) -> np.ndarray:
+    def _smooth_regime_transitions(self, regimes: np.ndarray) -> np.ndarray:
         """Smooth regime transitions to reduce noise"""
-        from scipy.ndimage import median_filter
-        return median_filter(regimes, size=window)
+        return median_filter(regimes, size=self.config.regime_overlap_window)
     
-    def _calculate_global_regime_statistics(
+    def _calculate_regime_statistics(
         self,
         regimes: np.ndarray,
-        features_dict: Dict[str, Dict[str, np.ndarray]]
+        features_a: Dict[str, np.ndarray],
+        features_b: Dict[str, np.ndarray]
     ):
-        """Calculate statistics for each global regime"""
+        """Calculate statistics for each regime"""
         
         self.regime_features = {}
         
-        for r in range(self.config.n_global_regimes):
+        for r in range(self.config.n_regimes):
             mask = (regimes == r)
             n_points = np.sum(mask)
             
             if n_points > 0:
-                stats = {
+                self.regime_features[r] = {
                     'n_points': n_points,
                     'frequency': n_points / len(regimes),
-                    'avg_returns': {},
-                    'avg_volatility': {},
-                    'jump_intensity': {},
-                    'regime_name': self.config.global_regime_names[r]
+                    'mean_rhoT_a': np.mean(features_a['rho_T'][mask]),
+                    'mean_rhoT_b': np.mean(features_b['rho_T'][mask]),
+                    'std_rhoT_a': np.std(features_a['rho_T'][mask]),
+                    'std_rhoT_b': np.std(features_b['rho_T'][mask]),
+                    'jumps_a': np.sum(features_a['delta_LambdaC_pos'][mask] + 
+                                     features_a['delta_LambdaC_neg'][mask]),
+                    'jumps_b': np.sum(features_b['delta_LambdaC_pos'][mask] + 
+                                     features_b['delta_LambdaC_neg'][mask])
                 }
-                
-                # Calculate per-series statistics
-                for name, features in features_dict.items():
-                    # Average returns (approximated by data differences)
-                    data = features.get('data', np.zeros(len(mask)))
-                    returns = np.diff(data, prepend=data[0]) / (data[:-1] + 1e-8)
-                    stats['avg_returns'][name] = np.mean(returns[mask[:-1]])
-                    
-                    # Average volatility (tension)
-                    stats['avg_volatility'][name] = np.mean(features['rho_T'][mask])
-                    
-                    # Jump intensity
-                    pos_jumps = np.sum(features['delta_LambdaC_pos'][mask])
-                    neg_jumps = np.sum(features['delta_LambdaC_neg'][mask])
-                    stats['jump_intensity'][name] = (pos_jumps + neg_jumps) / n_points
-                
-                self.regime_features[r] = stats
-    
-    def _relabel_regimes_by_characteristics(
-        self,
-        regimes: np.ndarray,
-        features_dict: Dict[str, Dict[str, np.ndarray]]
-    ) -> np.ndarray:
-        """Relabel regimes based on market characteristics"""
-        
-        # Calculate aggregate market return for each regime
-        regime_returns = []
-        
-        for r in range(self.config.n_global_regimes):
-            mask = (regimes == r)
-            if np.sum(mask) > 0:
-                # Use average return across equity indices
-                returns = []
-                for name in ['Dow Jones', 'Nikkei 225', 'S&P 500']:
-                    if name in features_dict:
-                        data = features_dict[name]['data']
-                        ret = np.diff(data, prepend=data[0]) / (data[:-1] + 1e-8)
-                        returns.append(np.mean(ret[mask[:-1]]))
-                
-                avg_return = np.mean(returns) if returns else 0
-                regime_returns.append((r, avg_return))
             else:
-                regime_returns.append((r, 0))
-        
-        # Sort by return: highest = Bull (0), middle = Neutral (1), lowest = Bear (2)
-        regime_returns.sort(key=lambda x: x[1], reverse=True)
-        
-        # Create relabeling map
-        relabel_map = {old_r: new_r for new_r, (old_r, _) in enumerate(regime_returns)}
-        
-        # Apply relabeling
-        new_regimes = np.array([relabel_map[r] for r in regimes])
-        
-        return new_regimes
+                self.regime_features[r] = {
+                    'n_points': 0,
+                    'frequency': 0,
+                    'mean_rhoT_a': 0,
+                    'mean_rhoT_b': 0
+                }
     
-    def _calculate_transition_matrix(self, regimes: np.ndarray) -> np.ndarray:
-        """Calculate regime transition probability matrix"""
-        n_regimes = self.config.n_global_regimes
-        trans_mat = np.zeros((n_regimes, n_regimes))
+    def detect_regime_transitions(self, smooth_window: int = 5) -> List[Tuple[int, int, int]]:
+        """Detect transition points between regimes"""
         
-        for i in range(len(regimes) - 1):
-            trans_mat[regimes[i], regimes[i+1]] += 1
+        if self.regime_labels is None:
+            raise ValueError("Must detect regimes first")
         
-        # Normalize rows
-        row_sums = trans_mat.sum(axis=1)
-        trans_mat = trans_mat / (row_sums[:, np.newaxis] + 1e-8)
+        # Smooth labels
+        smoothed_labels = median_filter(self.regime_labels, size=smooth_window)
         
-        return trans_mat
+        # Find transitions
+        transitions = []
+        for i in range(1, len(smoothed_labels)):
+            if smoothed_labels[i] != smoothed_labels[i-1]:
+                transitions.append((i, smoothed_labels[i-1], smoothed_labels[i]))
+        
+        return transitions
     
-    def detect_pair_specific_subregimes(
+    def get_regime_specific_config(
         self,
-        pair_features: Dict[str, np.ndarray],
-        global_regime_mask: np.ndarray,
-        pair_name: Tuple[str, str]
-    ) -> Dict[int, np.ndarray]:
-        """
-        Detect sub-regimes within each global regime for a specific pair
+        regime_idx: int,
+        base_config: L3Config
+    ) -> L3Config:
+        """Get regime-specific Bayesian configuration"""
         
-        Lambda³: Pair-specific structural variations within global market states
-        """
-        if not self.config.enable_sub_regimes:
-            return {}
-        
-        sub_regimes = {}
-        
-        for g_regime in range(self.config.n_global_regimes):
-            mask = (global_regime_mask == g_regime)
-            n_points = np.sum(mask)
-            
-            if n_points < self.config.min_regime_size * 2:
-                # Not enough data for sub-regime detection
-                sub_regimes[g_regime] = np.zeros(n_points, dtype=int)
-                continue
-            
-            # Extract features for this global regime
-            sub_features = []
-            for key in ['delta_LambdaC_pos', 'delta_LambdaC_neg', 'rho_T']:
-                if key in pair_features:
-                    sub_features.append(pair_features[key][mask])
-            
-            if not sub_features:
-                continue
-                
-            X = np.column_stack(sub_features)
-            
-            # Normalize
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X)
-            
-            # Detect sub-regimes
-            if self.config.use_gmm:
-                model = GaussianMixture(
-                    n_components=min(self.config.n_sub_regimes, n_points // 30),
-                    covariance_type='diag',
-                    n_init=5,
-                    random_state=42
-                )
-            else:
-                model = KMeans(
-                    n_clusters=min(self.config.n_sub_regimes, n_points // 30),
-                    n_init=10,
-                    random_state=42
-                )
-            
-            sub_labels = model.fit_predict(X_scaled)
-            sub_regimes[g_regime] = sub_labels
-            
-        return sub_regimes
-    
-    def get_regime_specific_config(self, regime: int, base_config: 'L3Config') -> 'L3Config':
-        """
-        Get regime-specific Bayesian configuration
-        
-        Different regimes may need different priors and sampling parameters
-        """
-        if not self.config.regime_specific_priors:
+        if not self.config.regime_specific_sampling:
             return base_config
         
-        # Create a copy of base config
+        # Create a copy
         import copy
         regime_config = copy.deepcopy(base_config)
         
-        regime_name = self.config.global_regime_names[regime]
-        
-        # Adjust based on regime characteristics
-        if regime_name == 'Bull':
-            # Bull markets: stronger positive interactions, lower volatility
-            regime_config.draws = max(4000, base_config.draws // 2)
-            regime_config.tune = max(4000, base_config.tune // 2)
+        # Adjust based on regime size
+        if hasattr(self, 'regime_features') and regime_idx in self.regime_features:
+            regime_size = self.regime_features[regime_idx]['n_points']
             
-        elif regime_name == 'Bear':
-            # Bear markets: higher volatility, need more samples
-            regime_config.draws = int(base_config.draws * 1.5)
-            regime_config.tune = int(base_config.tune * 1.5)
-            regime_config.target_accept = 0.9  # Lower target for difficult posterior
-            
-        elif regime_name == 'Neutral':
-            # Neutral: standard settings
-            pass
-        
-        # Adjust for regime size if adaptive sampling
-        if self.config.adaptive_sampling and hasattr(self, 'regime_features'):
-            regime_size = self.regime_features[regime]['n_points']
             if regime_size < 100:
-                # Small regime: reduce samples to avoid overfitting
-                regime_config.draws = min(regime_config.draws, 2000)
-                regime_config.tune = min(regime_config.tune, 2000)
+                # Small regime: reduce samples
+                regime_config.draws = min(regime_config.draws, 4000)
+                regime_config.tune = min(regime_config.tune, 4000)
+            elif regime_size > 500:
+                # Large regime: can use more samples
+                regime_config.draws = int(regime_config.draws * 1.2)
+                regime_config.tune = int(regime_config.tune * 1.2)
         
         return regime_config
 
 # ===============================
-# REGIME-AWARE BAYESIAN ANALYSIS
+# REGIME-AWARE PAIRWISE ANALYSIS
 # ===============================
-class RegimeAwareBayesianAnalysis:
+class RegimeAwarePairwiseAnalysis:
     """
-    Regime-specific Bayesian analysis for Lambda³ framework
+    Regime-specific pairwise Bayesian analysis for Lambda³ framework.
+    Based on WeatherAnalysis_ny.py pattern.
     """
     
     def __init__(
         self,
-        hierarchical_config: HierarchicalRegimeConfig,
-        bayes_logger: Optional['Lambda3BayesianLogger'] = None
+        regime_config: RegimeConfig,
+        bayes_logger: Optional[Lambda3BayesianLogger] = None
     ):
-        self.h_config = hierarchical_config
-        self.regime_detector = HierarchicalRegimeDetector(hierarchical_config)
+        self.regime_config = regime_config
         self.bayes_logger = bayes_logger
-        self.regime_results = {}
-        self.transition_dynamics = {}
-        
-    def run_regime_aware_analysis(
+        self.regime_detector = AdaptivePairwiseRegimeDetector(regime_config)
+    
+    def analyze_pair_with_regimes(
         self,
+        name_a: str,
+        name_b: str,
         series_dict: Dict[str, np.ndarray],
         features_dict: Dict[str, Dict[str, np.ndarray]],
-        base_config: 'L3Config',
-        max_pairs: Optional[int] = None
+        base_config: L3Config,
+        show_plots: bool = True,
+        analyze_regimes_separately: bool = True
     ) -> Dict[str, Any]:
         """
-        Run complete regime-aware Lambda³ analysis
+        Analyze a pair with regime detection.
         
         Process:
-        1. Detect global market regimes
-        2. Regime-specific pairwise Bayesian analysis
-        3. Regime transition dynamics
-        4. Cross-regime comparison
+        1. Detect pair-specific regimes
+        2. Overall analysis across all data
+        3. Regime-specific analysis
+        4. Compare across regimes
         """
         
-        print("\n" + "="*80)
-        print("LAMBDA³ REGIME-AWARE BAYESIAN ANALYSIS")
-        print("="*80)
+        print(f"\n{'='*60}")
+        print(f"ANALYZING PAIR WITH REGIME DETECTION: {name_a} ⇄ {name_b}")
+        print(f"{'='*60}")
         
-        # Stage 1: Global regime detection
-        global_regimes = self.regime_detector.detect_global_market_regimes(
-            features_dict
+        # Get features
+        feats_a = features_dict[name_a]
+        feats_b = features_dict[name_b]
+        
+        # ===============================
+        # Step 1: Regime Detection
+        # ===============================
+        regimes = self.regime_detector.detect_pairwise_regimes(
+            feats_a, feats_b, (name_a, name_b)
         )
         
-        # Stage 2: Regime-specific analysis
-        self._run_regime_specific_pairwise_analysis(
-            series_dict,
-            features_dict,
-            global_regimes,
-            base_config,
-            max_pairs
+        # Get or generate regime names
+        if self.regime_config.regime_names is None:
+            regime_names = [f"Regime-{i+1}" for i in range(self.regime_config.n_regimes)]
+        else:
+            regime_names = self.regime_config.regime_names
+        
+        # Calculate regime statistics
+        regime_stats = self._calculate_regime_statistics(
+            regimes, regime_names, feats_a, feats_b, name_a, name_b
         )
         
-        # Stage 3: Regime transition dynamics
-        self._analyze_regime_transition_dynamics(
-            features_dict,
-            global_regimes
+        self._print_regime_summary(regime_stats)
+        
+        # ===============================
+        # Step 2: Overall Analysis
+        # ===============================
+        print(f"\n2. Overall analysis across all regimes...")
+        
+        overall_results = self._analyze_overall(
+            name_a, name_b, series_dict, features_dict, base_config, show_plots
         )
         
-        # Stage 4: Cross-regime comparison
-        comparison_results = self._compare_across_regimes()
+        # ===============================
+        # Step 3: Regime-Specific Analysis
+        # ===============================
+        regime_results = {}
         
-        # Compile results
-        results = {
-            'global_regimes': global_regimes,
+        if analyze_regimes_separately:
+            print(f"\n3. Analyzing each structural regime separately...")
+            
+            regime_results = self._analyze_by_regime(
+                name_a, name_b, series_dict, features_dict,
+                regimes, regime_names, regime_stats, base_config
+            )
+        
+        # ===============================
+        # Step 4: Visualization
+        # ===============================
+        if show_plots and len(regime_results) > 0:
+            self._plot_regime_comparison(
+                regime_results, overall_results, regime_names, name_a, name_b
+            )
+        
+        # Detect transitions
+        transitions = self.regime_detector.detect_regime_transitions()
+        
+        return {
+            'overall_results': overall_results,
+            'regime_results': regime_results,
+            'regime_labels': regimes,
+            'regime_statistics': regime_stats,
             'regime_detector': self.regime_detector,
-            'regime_specific_results': self.regime_results,
-            'transition_dynamics': self.transition_dynamics,
-            'cross_regime_comparison': comparison_results,
-            'regime_statistics': self.regime_detector.regime_features,
-            'transition_matrix': self.regime_detector.transition_matrix
+            'detection_method_used': self.regime_detector.detection_method_used,
+            'transitions': transitions
         }
-        
-        # Generate summary report
-        self._generate_regime_summary_report(results)
-        
-        return results
     
-    def _run_regime_specific_pairwise_analysis(
+    def _calculate_regime_statistics(
         self,
+        regimes: np.ndarray,
+        regime_names: List[str],
+        feats_a: Dict[str, np.ndarray],
+        feats_b: Dict[str, np.ndarray],
+        name_a: str,
+        name_b: str
+    ) -> Dict[str, Dict]:
+        """Calculate detailed statistics for each regime"""
+        
+        regime_stats = {}
+        
+        for i, regime_name in enumerate(regime_names):
+            mask = (regimes == i)
+            n_points = np.sum(mask)
+            
+            if n_points > 0:
+                regime_stats[regime_name] = {
+                    'count': n_points,
+                    'percentage': n_points / len(regimes) * 100,
+                    f'mean_{name_a}': np.mean(feats_a['data'][mask]),
+                    f'mean_{name_b}': np.mean(feats_b['data'][mask]),
+                    f'mean_rhoT_{name_a}': np.mean(feats_a['rho_T'][mask]),
+                    f'mean_rhoT_{name_b}': np.mean(feats_b['rho_T'][mask]),
+                    f'jumps_{name_a}': np.sum(feats_a['delta_LambdaC_pos'][mask] + 
+                                             feats_a['delta_LambdaC_neg'][mask]),
+                    f'jumps_{name_b}': np.sum(feats_b['delta_LambdaC_pos'][mask] + 
+                                             feats_b['delta_LambdaC_neg'][mask])
+                }
+        
+        return regime_stats
+    
+    def _print_regime_summary(self, regime_stats: Dict[str, Dict]):
+        """Print regime summary statistics"""
+        
+        print("\nDetected Structural Regimes:")
+        for regime_name, stats in regime_stats.items():
+            print(f"\n{regime_name}:")
+            print(f"  - Points: {stats['count']} ({stats['percentage']:.1f}%)")
+            
+            # Print mean tensions
+            rho_keys = [k for k in stats.keys() if k.startswith('mean_rhoT_')]
+            for key in rho_keys:
+                series_name = key.replace('mean_rhoT_', '')
+                print(f"  - Mean ρT ({series_name}): {stats[key]:.3f}")
+            
+            # Print jumps
+            jump_keys = [k for k in stats.keys() if k.startswith('jumps_')]
+            for key in jump_keys:
+                series_name = key.replace('jumps_', '')
+                print(f"  - Total jumps ({series_name}): {stats[key]}")
+    
+    def _analyze_overall(
+        self,
+        name_a: str,
+        name_b: str,
         series_dict: Dict[str, np.ndarray],
         features_dict: Dict[str, Dict[str, np.ndarray]],
-        global_regimes: np.ndarray,
-        base_config: 'L3Config',
-        max_pairs: Optional[int] = None
-    ):
-        """Run pairwise analysis for each regime separately"""
+        config: L3Config,
+        show_plots: bool
+    ) -> Dict[str, Any]:
+        """Perform overall analysis across all data"""
         
-        from itertools import combinations
-        series_names = list(series_dict.keys())
-        all_pairs = list(combinations(series_names, 2))
+        # Fit asymmetric models
+        trace_a, trace_b = self._fit_asymmetric_models(
+            name_a, name_b, series_dict, features_dict, config
+        )
         
-        if max_pairs and len(all_pairs) > max_pairs:
-            all_pairs = all_pairs[:max_pairs]
-            print(f"\nLimiting to {max_pairs} pairs for computational efficiency")
+        # Extract coefficients
+        beta_b_on_a, beta_a_on_b, hdi_results = self._extract_interaction_effects(
+            trace_a, trace_b, name_a, name_b, config
+        )
         
-        print(f"\nAnalyzing {len(all_pairs)} pairs across {self.h_config.n_global_regimes} regimes")
+        # Log with Bayesian logger if available
+        if self.bayes_logger:
+            model_id = f"overall_{name_a}_vs_{name_b}"
+            self.bayes_logger.log_trace(
+                trace_a,
+                model_id=model_id + "_a",
+                model_type="asymmetric_regression",
+                series_names=[name_a, name_b],
+                verbose=False
+            )
         
-        # Initialize storage
-        self.regime_results = {r: {} for r in range(self.h_config.n_global_regimes)}
+        return {
+            'beta_b_on_a': beta_b_on_a,
+            'beta_a_on_b': beta_a_on_b,
+            'hdi_results': hdi_results,
+            'trace_a': trace_a,
+            'trace_b': trace_b
+        }
+    
+    def _analyze_by_regime(
+        self,
+        name_a: str,
+        name_b: str,
+        series_dict: Dict[str, np.ndarray],
+        features_dict: Dict[str, Dict[str, np.ndarray]],
+        regimes: np.ndarray,
+        regime_names: List[str],
+        regime_stats: Dict[str, Dict],
+        base_config: L3Config
+    ) -> Dict[str, Dict]:
+        """Analyze each regime separately"""
         
-        # Analyze each regime
-        for regime_idx in range(self.h_config.n_global_regimes):
-            regime_mask = (global_regimes == regime_idx)
-            n_regime_points = np.sum(regime_mask)
-            regime_name = self.h_config.global_regime_names[regime_idx]
+        regime_results = {}
+        
+        for regime_idx, regime_name in enumerate(regime_names):
+            mask = (regimes == regime_idx)
+            n_regime_points = np.sum(mask)
             
-            if n_regime_points < self.h_config.min_regime_size:
-                print(f"\nSkipping {regime_name} regime: insufficient data ({n_regime_points} points)")
+            # Skip if too few points
+            if n_regime_points < 20:
+                print(f"\nSkipping {regime_name}: insufficient data ({n_regime_points} points)")
                 continue
             
-            print(f"\n{'='*60}")
-            print(f"ANALYZING {regime_name.upper()} REGIME ({n_regime_points} points)")
-            print(f"{'='*60}")
+            print(f"\n{'='*50}")
+            print(f"REGIME: {regime_name} ({n_regime_points} points)")
+            print(f"{'='*50}")
             
-            # Get regime-specific configuration
+            # Create regime-specific data and features
+            regime_data = {
+                name_a: series_dict[name_a][mask],
+                name_b: series_dict[name_b][mask]
+            }
+            
+            regime_features = {
+                name_a: self._extract_regime_features(features_dict[name_a], mask),
+                name_b: self._extract_regime_features(features_dict[name_b], mask)
+            }
+            
+            # Get regime-specific config
             regime_config = self.regime_detector.get_regime_specific_config(
                 regime_idx, base_config
             )
             
-            # Analyze each pair in this regime
-            for pair_idx, (name_a, name_b) in enumerate(all_pairs):
-                if pair_idx % 10 == 0:
-                    print(f"  Progress: {pair_idx}/{len(all_pairs)} pairs...")
+            try:
+                # Fit regime-specific models
+                trace_a_regime, trace_b_regime = self._fit_asymmetric_models(
+                    name_a, name_b, regime_data, regime_features, regime_config
+                )
                 
-                try:
-                    # Extract regime-specific data
-                    regime_data = {
-                        name_a: series_dict[name_a][regime_mask],
-                        name_b: series_dict[name_b][regime_mask]
-                    }
-                    
-                    regime_features = {
-                        name_a: self._extract_regime_features(features_dict[name_a], regime_mask),
-                        name_b: self._extract_regime_features(features_dict[name_b], regime_mask)
-                    }
-                    
-                    # Check for sub-regimes
-                    pair_features_combined = {
-                        'delta_LambdaC_pos': np.concatenate([
-                            regime_features[name_a]['delta_LambdaC_pos'],
-                            regime_features[name_b]['delta_LambdaC_pos']
-                        ]),
-                        'delta_LambdaC_neg': np.concatenate([
-                            regime_features[name_a]['delta_LambdaC_neg'],
-                            regime_features[name_b]['delta_LambdaC_neg']
-                        ]),
-                        'rho_T': np.concatenate([
-                            regime_features[name_a]['rho_T'],
-                            regime_features[name_b]['rho_T']
-                        ])
-                    }
-                    
-                    # Detect sub-regimes if enabled
-                    sub_regimes = self.regime_detector.detect_pair_specific_subregimes(
-                        pair_features_combined,
-                        global_regimes[regime_mask],
-                        (name_a, name_b)
+                # Extract results
+                beta_b_on_a, beta_a_on_b, hdi_results = self._extract_interaction_effects(
+                    trace_a_regime, trace_b_regime, name_a, name_b, regime_config
+                )
+                
+                # Store results
+                regime_results[regime_name] = {
+                    'beta_b_on_a_pos': beta_b_on_a,
+                    'beta_a_on_b_pos': beta_a_on_b,
+                    'hdi': hdi_results,
+                    'n_points': n_regime_points
+                }
+                
+                # Log with Bayesian logger
+                if self.bayes_logger:
+                    model_id = f"regime_{regime_name}_{name_a}_vs_{name_b}"
+                    self.bayes_logger.log_trace(
+                        trace_a_regime,
+                        model_id=model_id,
+                        model_type="regime_specific",
+                        series_names=[name_a, name_b],
+                        verbose=False
                     )
-                    
-                    # Fit Bayesian model for this regime
-                    trace, model = self._fit_regime_specific_bayesian(
-                        regime_data,
-                        regime_features,
-                        regime_config,
-                        regime_name,
-                        (name_a, name_b)
-                    )
-                    
-                    # Extract results
-                    interaction_coeffs = self._extract_regime_interaction_coefficients(
-                        trace, [name_a, name_b]
-                    )
-                    
-                    # Store results
-                    pair_key = f"{name_a}_vs_{name_b}"
-                    self.regime_results[regime_idx][pair_key] = {
-                        'trace': trace,
-                        'model': model,
-                        'interaction_coefficients': interaction_coeffs,
-                        'sub_regimes': sub_regimes,
-                        'series_names': [name_a, name_b],
-                        'n_points': n_regime_points
-                    }
-                    
-                except Exception as e:
-                    print(f"    Error in {name_a} vs {name_b}: {str(e)}")
-                    continue
-            
-            # Summary for this regime
-            self._summarize_regime_results(regime_idx, regime_name)
+                
+                # Print results
+                print(f"\n{regime_name} - Asymmetric Interaction Effects:")
+                print(f"  {name_b} → {name_a}: β = {beta_b_on_a:.3f}")
+                print(f"  {name_a} → {name_b}: β = {beta_a_on_b:.3f}")
+                
+                # Print HDI
+                if hdi_results:
+                    print(f"\n{regime_name} - HDI ({regime_config.hdi_prob*100:.0f}%):")
+                    for key, (low, high) in hdi_results.items():
+                        print(f"  {key}: [{low:.3f}, {high:.3f}]")
+                
+            except Exception as e:
+                print(f"Error analyzing regime {regime_name}: {e}")
+                continue
+        
+        return regime_results
     
     def _extract_regime_features(
         self,
@@ -734,407 +680,245 @@ class RegimeAwareBayesianAnalysis:
         mask: np.ndarray
     ) -> Dict[str, np.ndarray]:
         """Extract features for regime-specific analysis"""
+        
         regime_features = {}
         
         for key in ['delta_LambdaC_pos', 'delta_LambdaC_neg', 'rho_T', 'data']:
             if key in features:
                 regime_features[key] = features[key][mask]
         
-        # Reset time trend for regime
+        # Reset time trend
         regime_features['time_trend'] = np.arange(np.sum(mask))
+        
+        # Include local jump if available
+        if 'local_jump' in features:
+            regime_features['local_jump'] = features['local_jump'][mask]
         
         return regime_features
     
-    def _fit_regime_specific_bayesian(
+    def _fit_asymmetric_models(
         self,
-        regime_data: Dict[str, np.ndarray],
-        regime_features: Dict[str, Dict[str, np.ndarray]],
-        config: 'L3Config',
-        regime_name: str,
-        pair: Tuple[str, str]
-    ) -> Tuple[Any, Any]:
-        """Fit Bayesian model with regime-specific priors"""
-        
-        # Import the main fitting function
-        # from lambda3_zeroshot_tensor_field import fit_l3_pairwise_bayesian_system
-        
-        # For now, create a placeholder implementation
-        # In real implementation, this would call the main function
-        # with regime-specific modifications
-        
-        name_a, name_b = pair
-        
-        with pm.Model() as model:
-            # Regime-specific priors based on regime characteristics
-            if regime_name == 'Bull':
-                # Bull market: expect positive bias, lower volatility
-                beta_0_a = pm.Normal('beta_0_a', mu=0.5, sigma=1.5)
-                beta_0_b = pm.Normal('beta_0_b', mu=0.5, sigma=1.5)
-                sigma_prior = 0.5
-            elif regime_name == 'Bear':
-                # Bear market: expect negative bias, higher volatility
-                beta_0_a = pm.Normal('beta_0_a', mu=-0.5, sigma=2.5)
-                beta_0_b = pm.Normal('beta_0_b', mu=-0.5, sigma=2.5)
-                sigma_prior = 1.5
-            else:  # Neutral
-                beta_0_a = pm.Normal('beta_0_a', mu=0, sigma=2)
-                beta_0_b = pm.Normal('beta_0_b', mu=0, sigma=2)
-                sigma_prior = 1.0
-            
-            # Standard parameters (simplified for illustration)
-            beta_interact_pos = pm.Normal('beta_interact_pos', mu=0, sigma=2)
-            beta_interact_neg = pm.Normal('beta_interact_neg', mu=0, sigma=2)
-            
-            # Simplified mean model
-            mu_a = beta_0_a + beta_interact_pos * regime_features[name_b]['delta_LambdaC_pos']
-            mu_b = beta_0_b + beta_interact_pos * regime_features[name_a]['delta_LambdaC_pos']
-            
-            # Observation model
-            sigma_a = pm.HalfNormal('sigma_a', sigma=sigma_prior)
-            sigma_b = pm.HalfNormal('sigma_b', sigma=sigma_prior)
-            
-            y_a = pm.Normal('y_a', mu=mu_a, sigma=sigma_a, observed=regime_data[name_a])
-            y_b = pm.Normal('y_b', mu=mu_b, sigma=sigma_b, observed=regime_data[name_b])
-            
-            # Sample
-            trace = pm.sample(
-                draws=config.draws,
-                tune=config.tune,
-                target_accept=config.target_accept,
-                return_inferencedata=True,
-                cores=4
-            )
-        
-        return trace, model
-    
-    def _extract_regime_interaction_coefficients(
-        self,
-        trace: Any,
-        series_names: List[str]
-    ) -> Dict[str, float]:
-        """Extract interaction coefficients from regime-specific trace"""
-        summary = az.summary(trace)
-        
-        # Simplified extraction
-        coeffs = {
-            'interaction_strength': abs(summary.loc['beta_interact_pos', 'mean']) if 'beta_interact_pos' in summary.index else 0,
-            'regime_intercept_a': summary.loc['beta_0_a', 'mean'] if 'beta_0_a' in summary.index else 0,
-            'regime_intercept_b': summary.loc['beta_0_b', 'mean'] if 'beta_0_b' in summary.index else 0,
-        }
-        
-        return coeffs
-    
-    def _summarize_regime_results(self, regime_idx: int, regime_name: str):
-        """Summarize results for a specific regime"""
-        regime_results = self.regime_results[regime_idx]
-        
-        if not regime_results:
-            return
-        
-        print(f"\n{regime_name} Regime Summary:")
-        print("-" * 40)
-        
-        # Find strongest interactions
-        interactions = []
-        for pair_key, results in regime_results.items():
-            if 'interaction_coefficients' in results:
-                strength = results['interaction_coefficients']['interaction_strength']
-                interactions.append((pair_key, strength))
-        
-        interactions.sort(key=lambda x: x[1], reverse=True)
-        
-        print(f"Top 5 interactions in {regime_name}:")
-        for pair, strength in interactions[:5]:
-            print(f"  {pair}: {strength:.4f}")
-    
-    def _analyze_regime_transition_dynamics(
-        self,
+        name_a: str,
+        name_b: str,
+        data_dict: Dict[str, np.ndarray],
         features_dict: Dict[str, Dict[str, np.ndarray]],
-        global_regimes: np.ndarray
+        config: L3Config
+    ) -> Tuple[Any, Any]:
+        """Fit asymmetric interaction models"""
+        
+        feats_a = features_dict[name_a]
+        feats_b = features_dict[name_b]
+        
+        # Model for A (with B interaction)
+        trace_a = fit_l3_bayesian_regression_asymmetric(
+            data=data_dict[name_a],
+            features_dict={
+                'delta_LambdaC_pos': feats_a['delta_LambdaC_pos'],
+                'delta_LambdaC_neg': feats_a['delta_LambdaC_neg'],
+                'rho_T': feats_a['rho_T'],
+                'time_trend': feats_a['time_trend']
+            },
+            config=config,
+            interaction_pos=feats_b['delta_LambdaC_pos'],
+            interaction_neg=feats_b['delta_LambdaC_neg'],
+            interaction_rhoT=feats_b['rho_T']
+        )
+        
+        # Model for B (with A interaction)
+        trace_b = fit_l3_bayesian_regression_asymmetric(
+            data=data_dict[name_b],
+            features_dict={
+                'delta_LambdaC_pos': feats_b['delta_LambdaC_pos'],
+                'delta_LambdaC_neg': feats_b['delta_LambdaC_neg'],
+                'rho_T': feats_b['rho_T'],
+                'time_trend': feats_b['time_trend']
+            },
+            config=config,
+            interaction_pos=feats_a['delta_LambdaC_pos'],
+            interaction_neg=feats_a['delta_LambdaC_neg'],
+            interaction_rhoT=feats_a['rho_T']
+        )
+        
+        return trace_a, trace_b
+    
+    def _extract_interaction_effects(
+        self,
+        trace_a: Any,
+        trace_b: Any,
+        name_a: str,
+        name_b: str,
+        config: L3Config
+    ) -> Tuple[float, float, Dict[str, Tuple[float, float]]]:
+        """Extract interaction coefficients and HDI"""
+        
+        summary_a = az.summary(trace_a, hdi_prob=config.hdi_prob)
+        summary_b = az.summary(trace_b, hdi_prob=config.hdi_prob)
+        
+        # Extract main effects (using positive as primary)
+        beta_b_on_a = summary_a.loc['beta_interact_pos', 'mean'] if 'beta_interact_pos' in summary_a.index else 0
+        beta_a_on_b = summary_b.loc['beta_interact_pos', 'mean'] if 'beta_interact_pos' in summary_b.index else 0
+        
+        # Extract HDI
+        hdi_results = {}
+        
+        def get_hdi_bounds(summary, param_name):
+            if param_name in summary.index:
+                hdi_cols = [col for col in summary.columns if 'hdi' in col.lower()]
+                if len(hdi_cols) >= 2:
+                    return summary.loc[param_name, hdi_cols[0]], summary.loc[param_name, hdi_cols[1]]
+            return None, None
+        
+        # B → A effects
+        low, high = get_hdi_bounds(summary_a, 'beta_interact_pos')
+        if low is not None:
+            hdi_results[f'{name_b}_to_{name_a}_pos'] = (low, high)
+        
+        low, high = get_hdi_bounds(summary_a, 'beta_interact_neg')
+        if low is not None:
+            hdi_results[f'{name_b}_to_{name_a}_neg'] = (low, high)
+        
+        # A → B effects
+        low, high = get_hdi_bounds(summary_b, 'beta_interact_pos')
+        if low is not None:
+            hdi_results[f'{name_a}_to_{name_b}_pos'] = (low, high)
+        
+        low, high = get_hdi_bounds(summary_b, 'beta_interact_neg')
+        if low is not None:
+            hdi_results[f'{name_a}_to_{name_b}_neg'] = (low, high)
+        
+        return beta_b_on_a, beta_a_on_b, hdi_results
+    
+    def _plot_regime_comparison(
+        self,
+        regime_results: Dict,
+        overall_results: Dict,
+        regime_names: List[str],
+        name_a: str,
+        name_b: str
     ):
-        """Analyze dynamics at regime transition points"""
+        """Plot comparison across regimes"""
         
-        print("\n" + "="*60)
-        print("REGIME TRANSITION DYNAMICS ANALYSIS")
-        print("="*60)
+        # Prepare data
+        regimes = ['Overall'] + list(regime_results.keys())
+        beta_b_on_a = [overall_results['beta_b_on_a']]
+        beta_a_on_b = [overall_results['beta_a_on_b']]
         
-        # Find transition points
-        transitions = []
-        for i in range(1, len(global_regimes)):
-            if global_regimes[i] != global_regimes[i-1]:
-                transitions.append({
-                    'index': i,
-                    'from_regime': global_regimes[i-1],
-                    'to_regime': global_regimes[i],
-                    'from_name': self.h_config.global_regime_names[global_regimes[i-1]],
-                    'to_name': self.h_config.global_regime_names[global_regimes[i]]
-                })
+        for regime in regime_results.keys():
+            beta_b_on_a.append(regime_results[regime]['beta_b_on_a_pos'])
+            beta_a_on_b.append(regime_results[regime]['beta_a_on_b_pos'])
         
-        print(f"Found {len(transitions)} regime transitions")
+        # Create figure
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
         
-        # Analyze structural changes around transitions
-        window = 10  # Look at ±10 periods around transition
+        # Bar plot of interaction coefficients
+        ax1 = axes[0]
+        x = np.arange(len(regimes))
+        width = 0.35
         
-        for trans in transitions[:5]:  # Analyze first 5 transitions
-            idx = trans['index']
-            print(f"\nTransition at index {idx}: {trans['from_name']} → {trans['to_name']}")
-            
-            # Calculate average structural changes before/after
-            for name, features in list(features_dict.items())[:3]:  # First 3 series
-                pre_jumps = np.sum(features['delta_LambdaC_pos'][max(0, idx-window):idx])
-                post_jumps = np.sum(features['delta_LambdaC_pos'][idx:min(len(features['delta_LambdaC_pos']), idx+window)])
+        bars1 = ax1.bar(x - width/2, beta_b_on_a, width,
+                        label=f'{name_b} → {name_a}', color='royalblue', alpha=0.8)
+        bars2 = ax1.bar(x + width/2, beta_a_on_b, width,
+                        label=f'{name_a} → {name_b}', color='darkorange', alpha=0.8)
+        
+        ax1.set_xlabel('Structural Regime')
+        ax1.set_ylabel('Interaction Coefficient β')
+        ax1.set_title('Cross-Series Interactions by Regime')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(regimes, rotation=45, ha='right')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        ax1.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        
+        # Add value labels
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                ax1.annotate(f'{height:.2f}',
+                           xy=(bar.get_x() + bar.get_width() / 2, height),
+                           xytext=(0, 3 if height >= 0 else -15),
+                           textcoords="offset points",
+                           ha='center', va='bottom' if height >= 0 else 'top',
+                           fontsize=8)
+        
+        # HDI width comparison
+        ax2 = axes[1]
+        hdi_widths_b_on_a = []
+        hdi_widths_a_on_b = []
+        regime_labels_hdi = []
+        
+        for regime_name in regime_results.keys():
+            if 'hdi' in regime_results[regime_name]:
+                hdi_dict = regime_results[regime_name]['hdi']
                 
-                pre_tension = np.mean(features['rho_T'][max(0, idx-window):idx])
-                post_tension = np.mean(features['rho_T'][idx:min(len(features['rho_T']), idx+window)])
+                key_b_on_a = f'{name_b}_to_{name_a}_pos'
+                key_a_on_b = f'{name_a}_to_{name_b}_pos'
                 
-                print(f"  {name}: Jumps {pre_jumps}→{post_jumps}, Tension {pre_tension:.3f}→{post_tension:.3f}")
+                if key_b_on_a in hdi_dict:
+                    low, high = hdi_dict[key_b_on_a]
+                    hdi_widths_b_on_a.append(high - low)
+                    regime_labels_hdi.append(regime_name)
+                
+                if key_a_on_b in hdi_dict:
+                    low, high = hdi_dict[key_a_on_b]
+                    hdi_widths_a_on_b.append(high - low)
         
-        self.transition_dynamics = {
-            'transitions': transitions,
-            'transition_matrix': self.regime_detector.transition_matrix
-        }
-    
-    def _compare_across_regimes(self) -> Dict[str, Any]:
-        """Compare interaction patterns across different regimes"""
-        
-        comparison = {
-            'interaction_changes': {},
-            'regime_specific_patterns': {},
-            'stability_analysis': {}
-        }
-        
-        # Compare same pair across regimes
-        all_pairs = set()
-        for regime_results in self.regime_results.values():
-            all_pairs.update(regime_results.keys())
-        
-        for pair_key in all_pairs:
-            pair_comparison = {}
+        if hdi_widths_b_on_a:
+            x_hdi = np.arange(len(regime_labels_hdi))
+            ax2.bar(x_hdi - width/2, hdi_widths_b_on_a, width,
+                   label=f'{name_b} → {name_a}', color='royalblue', alpha=0.8)
+            ax2.bar(x_hdi + width/2, hdi_widths_a_on_b, width,
+                   label=f'{name_a} → {name_b}', color='darkorange', alpha=0.8)
             
-            for regime_idx, regime_results in self.regime_results.items():
-                if pair_key in regime_results:
-                    coeffs = regime_results[pair_key]['interaction_coefficients']
-                    pair_comparison[self.h_config.global_regime_names[regime_idx]] = coeffs['interaction_strength']
-            
-            if len(pair_comparison) > 1:
-                comparison['interaction_changes'][pair_key] = pair_comparison
+            ax2.set_xlabel('Structural Regime')
+            ax2.set_ylabel('HDI Width')
+            ax2.set_title('Uncertainty by Regime')
+            ax2.set_xticks(x_hdi)
+            ax2.set_xticklabels(regime_labels_hdi, rotation=45, ha='right')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
         
-        return comparison
-    
-    def _generate_regime_summary_report(self, results: Dict[str, Any]):
-        """Generate comprehensive regime analysis report"""
-        
-        print("\n" + "="*80)
-        print("REGIME-AWARE LAMBDA³ ANALYSIS SUMMARY")
-        print("="*80)
-        
-        # 1. Regime distribution
-        print("\nMarket Regime Distribution:")
-        for regime_idx, stats in self.regime_detector.regime_features.items():
-            print(f"  {stats['regime_name']}: {stats['frequency']*100:.1f}% ({stats['n_points']} periods)")
-        
-        # 2. Transition matrix
-        print("\nRegime Transition Probabilities:")
-        trans_mat = results['transition_matrix']
-        regime_names = self.h_config.global_regime_names
-        
-        print(f"{'From/To':<10}", end='')
-        for name in regime_names:
-            print(f"{name:>10}", end='')
-        print()
-        
-        for i, from_name in enumerate(regime_names):
-            print(f"{from_name:<10}", end='')
-            for j in range(len(regime_names)):
-                print(f"{trans_mat[i,j]:>10.3f}", end='')
-            print()
-        
-        # 3. Key findings
-        print("\nKey Regime-Specific Findings:")
-        
-        # Find pairs with largest regime-dependent changes
-        max_change = 0
-        max_change_pair = None
-        max_change_regimes = None
-        
-        for pair_key, regime_strengths in results['cross_regime_comparison']['interaction_changes'].items():
-            if len(regime_strengths) > 1:
-                values = list(regime_strengths.values())
-                change = max(values) - min(values)
-                if change > max_change:
-                    max_change = change
-                    max_change_pair = pair_key
-                    max_change_regimes = regime_strengths
-        
-        if max_change_pair:
-            print(f"\nLargest regime-dependent interaction change:")
-            print(f"  Pair: {max_change_pair}")
-            for regime, strength in max_change_regimes.items():
-                print(f"    {regime}: {strength:.4f}")
-        
-        # 4. Theoretical interpretation
-        print("\n" + "-"*80)
-        print("LAMBDA³ THEORETICAL INSIGHTS:")
-        print("-"*80)
-        print("• Market regimes represent distinct configurations in financial tensor space")
-        print("• Interaction coefficients change fundamentally between regimes")
-        print("• Regime transitions coincide with structural tensor reconfigurations")
-        print("• Sub-regimes capture pair-specific variations within global states")
-        print("• Non-stationary coupling reveals true market microstructure")
+        plt.suptitle(f'Regime Analysis: {name_a} ⇄ {name_b}', fontsize=16)
+        plt.tight_layout()
+        plt.show()
 
 # ===============================
-# VISUALIZATION FUNCTIONS
-# ===============================
-def plot_regime_timeline(
-    global_regimes: np.ndarray,
-    regime_names: List[str],
-    series_data: Optional[Dict[str, np.ndarray]] = None,
-    highlight_transitions: bool = True
-):
-    """Plot regime timeline with optional overlay of series data"""
-    
-    fig, axes = plt.subplots(2, 1, figsize=(14, 8), 
-                            gridspec_kw={'height_ratios': [1, 2]})
-    
-    # Top panel: Regime timeline
-    ax1 = axes[0]
-    
-    # Create colormap
-    colors = ['green', 'gray', 'red']  # Bull, Neutral, Bear
-    
-    # Plot regime blocks
-    for i in range(len(global_regimes)):
-        regime = global_regimes[i]
-        ax1.axvspan(i, i+1, facecolor=colors[regime], alpha=0.6)
-    
-    # Add regime labels
-    ax1.set_xlim(0, len(global_regimes))
-    ax1.set_ylim(0, 1)
-    ax1.set_ylabel('Market Regime')
-    ax1.set_yticks([])
-    
-    # Add legend
-    from matplotlib.patches import Patch
-    legend_elements = [Patch(facecolor=colors[i], label=regime_names[i]) 
-                      for i in range(len(regime_names))]
-    ax1.legend(handles=legend_elements, loc='upper right')
-    
-    # Highlight transitions
-    if highlight_transitions:
-        for i in range(1, len(global_regimes)):
-            if global_regimes[i] != global_regimes[i-1]:
-                ax1.axvline(x=i, color='black', linestyle='--', alpha=0.5)
-    
-    ax1.set_title('Market Regime Timeline')
-    
-    # Bottom panel: Series data (if provided)
-    ax2 = axes[1]
-    
-    if series_data:
-        for name, data in list(series_data.items())[:3]:  # Plot first 3 series
-            # Normalize for visualization
-            data_norm = (data - np.mean(data)) / np.std(data)
-            ax2.plot(data_norm, label=name, alpha=0.7)
-        
-        ax2.set_xlabel('Time')
-        ax2.set_ylabel('Normalized Value')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-    
-    ax2.set_xlim(0, len(global_regimes))
-    
-    plt.tight_layout()
-    plt.show()
-
-def plot_regime_interaction_heatmap(
-    regime_results: Dict[int, Dict[str, Any]],
-    regime_names: List[str]
-):
-    """Plot interaction strength heatmaps for each regime"""
-    
-    n_regimes = len(regime_results)
-    fig, axes = plt.subplots(1, n_regimes, figsize=(6*n_regimes, 5))
-    
-    if n_regimes == 1:
-        axes = [axes]
-    
-    # Get all unique pairs
-    all_pairs = set()
-    for regime_results_dict in regime_results.values():
-        all_pairs.update(regime_results_dict.keys())
-    all_pairs = sorted(list(all_pairs))
-    
-    # Extract series names
-    series_names = set()
-    for pair in all_pairs:
-        names = pair.split('_vs_')
-        series_names.update(names)
-    series_names = sorted(list(series_names))
-    
-    for regime_idx, ax in enumerate(axes):
-        # Create interaction matrix for this regime
-        n_series = len(series_names)
-        interaction_matrix = np.zeros((n_series, n_series))
-        
-        regime_data = regime_results.get(regime_idx, {})
-        
-        for pair_key, results in regime_data.items():
-            if 'interaction_coefficients' in results:
-                names = pair_key.split('_vs_')
-                i = series_names.index(names[0])
-                j = series_names.index(names[1])
-                strength = results['interaction_coefficients']['interaction_strength']
-                interaction_matrix[i, j] = strength
-                interaction_matrix[j, i] = strength  # Symmetric for visualization
-        
-        # Plot heatmap
-        im = ax.imshow(interaction_matrix, cmap='RdBu_r', aspect='auto',
-                       vmin=-np.max(np.abs(interaction_matrix)), 
-                       vmax=np.max(np.abs(interaction_matrix)))
-        
-        ax.set_xticks(range(n_series))
-        ax.set_yticks(range(n_series))
-        ax.set_xticklabels(series_names, rotation=45, ha='right')
-        ax.set_yticklabels(series_names)
-        ax.set_title(f'{regime_names[regime_idx]} Regime')
-        
-        # Add colorbar
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    
-    plt.suptitle('Interaction Strength by Market Regime', fontsize=16)
-    plt.tight_layout()
-    plt.show()
-
-# ===============================
-# INTEGRATION WITH MAIN ANALYSIS
+# MAIN ANALYSIS FUNCTION
 # ===============================
 def run_lambda3_regime_aware_analysis(
     data_source: Union[str, Dict[str, np.ndarray]],
-    base_config: 'L3Config' = None,
-    hierarchical_config: HierarchicalRegimeConfig = None,
+    base_config: L3Config = None,
+    regime_config: RegimeConfig = None,
     target_series: List[str] = None,
     max_pairs: int = None,
     verbose: bool = True
 ) -> Dict[str, Any]:
     """
-    Run Lambda³ analysis with hierarchical regime detection
+    Run Lambda³ analysis with pairwise regime detection.
     
-    This replaces the standard run_lambda3_analysis when regime-aware
-    analysis is needed
+    Parameters:
+    -----------
+    data_source : Data source
+    base_config : Lambda³ configuration
+    regime_config : Regime detection configuration
+    target_series : Series to analyze
+    max_pairs : Maximum pairs to analyze
+    verbose : Verbose output
+    
+    Returns:
+    --------
+    Complete analysis results
     """
     
     if base_config is None:
         base_config = L3Config()
     
-    if hierarchical_config is None:
-        hierarchical_config = HierarchicalRegimeConfig()
+    if regime_config is None:
+        regime_config = RegimeConfig()
     
-    # Load data (using main module's function)
-    # from lambda3_zeroshot_tensor_field import load_csv_data
-    # For now, create placeholder
+    # Load data
     if isinstance(data_source, str):
-        # series_dict = load_csv_data(data_source)
-        series_dict = {}  # Placeholder
+        from lambda3_zeroshot_tensor_field import load_csv_data
+        series_dict = load_csv_data(data_source)
     else:
         series_dict = data_source
     
@@ -1145,81 +929,165 @@ def run_lambda3_regime_aware_analysis(
     
     if verbose:
         print("="*80)
-        print("Lambda³ Regime-Aware Comprehensive Analysis")
+        print("Lambda³ Regime-Aware Analysis (Pairwise)")
         print(f"Series: {len(series_names)}, Length: {len(next(iter(series_dict.values())))}")
         print("="*80)
     
     # Initialize Bayesian logger
-    # from lambda3_zeroshot_tensor_field import Lambda3BayesianLogger
-    # bayes_logger = Lambda3BayesianLogger(hdi_prob=base_config.hdi_prob)
-    bayes_logger = None  # Placeholder
+    bayes_logger = Lambda3BayesianLogger(hdi_prob=base_config.hdi_prob)
     
     # Extract features
-    # from lambda3_zeroshot_tensor_field import calc_lambda3_features
     features_dict = {}
-    # for name, data in series_dict.items():
-    #     features_dict[name] = calc_lambda3_features(data, base_config)
+    for name, data in series_dict.items():
+        features_dict[name] = calc_lambda3_features(data, base_config)
     
-    # Run regime-aware analysis
-    regime_analyzer = RegimeAwareBayesianAnalysis(
-        hierarchical_config,
-        bayes_logger
-    )
+    # Initialize analyzer
+    analyzer = RegimeAwarePairwiseAnalysis(regime_config, bayes_logger)
     
-    regime_results = regime_analyzer.run_regime_aware_analysis(
-        series_dict,
-        features_dict,
-        base_config,
-        max_pairs
-    )
+    # Analyze pairs
+    from itertools import combinations
+    all_pairs = list(combinations(series_names, 2))
     
-    # Visualize results
-    if verbose:
-        plot_regime_timeline(
-            regime_results['global_regimes'],
-            hierarchical_config.global_regime_names,
-            series_dict
-        )
+    if max_pairs and len(all_pairs) > max_pairs:
+        all_pairs = all_pairs[:max_pairs]
+        print(f"\nLimiting to {max_pairs} pairs")
+    
+    print(f"\n{'='*60}")
+    print(f"ANALYZING {len(all_pairs)} PAIRS WITH REGIME DETECTION")
+    print(f"{'='*60}")
+    
+    pairwise_results = {}
+    
+    for i, (name_a, name_b) in enumerate(all_pairs, 1):
+        print(f"\n[{i}/{len(all_pairs)}] Analyzing: {name_a} ⇄ {name_b}")
         
-        plot_regime_interaction_heatmap(
-            regime_results['regime_specific_results'],
-            hierarchical_config.global_regime_names
-        )
+        try:
+            results = analyzer.analyze_pair_with_regimes(
+                name_a, name_b,
+                series_dict, features_dict,
+                base_config,
+                show_plots=(i <= 3),  # Show plots for first 3 pairs
+                analyze_regimes_separately=True
+            )
+            
+            pairwise_results[(name_a, name_b)] = results
+            
+        except Exception as e:
+            print(f"Error analyzing pair {name_a} ⇄ {name_b}: {e}")
+            continue
     
-    # Compile complete results
+    # Generate summary
+    if verbose and pairwise_results:
+        create_regime_summary(pairwise_results, series_names)
+    
+    # Compile results
     results = {
         'series_dict': series_dict,
         'series_names': series_names,
         'features_dict': features_dict,
-        'regime_analysis': regime_results,
+        'pairwise_regime_results': pairwise_results,
         'config': base_config,
-        'hierarchical_config': hierarchical_config,
+        'regime_config': regime_config,
         'bayes_logger': bayes_logger
     }
     
     return results
 
 # ===============================
+# SUMMARY FUNCTIONS
+# ===============================
+def create_regime_summary(pairwise_results: Dict, series_names: List[str]):
+    """Create comprehensive summary of regime analysis"""
+    
+    print("\n" + "="*70)
+    print("PAIRWISE REGIME ANALYSIS SUMMARY")
+    print("="*70)
+    
+    # Collect unique regimes
+    all_regimes = set()
+    for pair_key, results in pairwise_results.items():
+        if 'regime_results' in results:
+            all_regimes.update(results['regime_results'].keys())
+    
+    all_regimes = sorted(list(all_regimes))
+    
+    print(f"\nDetected {len(all_regimes)} unique regimes across all pairs:")
+    for regime in all_regimes:
+        print(f"  • {regime}")
+    
+    # Summary table
+    print("\n" + "-"*70)
+    print("INTERACTION EFFECTS BY REGIME")
+    print("-"*70)
+    
+    for pair_key, results in pairwise_results.items():
+        name_a, name_b = pair_key
+        print(f"\n{name_a} ⇄ {name_b}:")
+        
+        # Overall
+        overall = results['overall_results']
+        print(f"  Overall: {name_b}→{name_a} β={overall['beta_b_on_a']:.3f}, "
+              f"{name_a}→{name_b} β={overall['beta_a_on_b']:.3f}")
+        
+        # By regime
+        if 'regime_results' in results:
+            for regime_name, regime_data in results['regime_results'].items():
+                print(f"  {regime_name}: {name_b}→{name_a} β={regime_data['beta_b_on_a_pos']:.3f}, "
+                      f"{name_a}→{name_b} β={regime_data['beta_a_on_b_pos']:.3f}")
+    
+    # Key insights
+    print("\n" + "-"*70)
+    print("KEY INSIGHTS")
+    print("-"*70)
+    
+    # Find strongest regime effects
+    max_effect = 0
+    max_regime = None
+    max_pair = None
+    
+    for pair_key, results in pairwise_results.items():
+        if 'regime_results' in results:
+            for regime_name, regime_data in results['regime_results'].items():
+                effect = abs(regime_data['beta_b_on_a_pos']) + abs(regime_data['beta_a_on_b_pos'])
+                if effect > max_effect:
+                    max_effect = effect
+                    max_regime = regime_name
+                    max_pair = pair_key
+    
+    if max_regime:
+        print(f"\n• Strongest coupling in {max_regime} for {max_pair[0]} ⇄ {max_pair[1]}")
+    
+    # Theoretical interpretation
+    print("\n" + "-"*70)
+    print("LAMBDA³ THEORETICAL INTERPRETATION")
+    print("-"*70)
+    print("• Pairwise regimes represent local structural configurations")
+    print("• Different β values indicate context-dependent resonance")
+    print("• Regime transitions are structural phase changes in pair space")
+    print("• Narrower HDI suggests increased structural coherence")
+    
+    print("\n" + "="*70)
+
+# ===============================
 # EXAMPLE USAGE
 # ===============================
 if __name__ == "__main__":
-    print("Lambda³ Regime-Aware Extension Module")
+    print("Lambda³ Regime-Aware Extension (Pairwise)")
     print("="*60)
     
     # Example configuration
-    h_config = HierarchicalRegimeConfig(
-        n_global_regimes=3,
-        global_regime_names=['Bull', 'Neutral', 'Bear'],
-        n_sub_regimes=2,
-        use_gmm=True,
-        min_regime_size=50
+    regime_config = RegimeConfig(
+        n_regimes=3,
+        regime_names=['Stable', 'Transition', 'Volatile'],
+        use_adaptive_detection=True,
+        detection_method='auto',
+        min_regime_size=30
     )
     
     print("Configuration:")
-    print(f"  Global regimes: {h_config.n_global_regimes} ({', '.join(h_config.global_regime_names)})")
-    print(f"  Sub-regimes per global: {h_config.n_sub_regimes}")
-    print(f"  Detection method: {'GMM' if h_config.use_gmm else 'K-means'}")
-    print(f"  Minimum regime size: {h_config.min_regime_size}")
+    print(f"  Regimes: {regime_config.n_regimes}")
+    print(f"  Detection: {regime_config.detection_method}")
+    print(f"  Adaptive: {regime_config.use_adaptive_detection}")
     
-    print("\nThis module extends lambda3_zeroshot_tensor_field.py")
-    print("with regime-aware Bayesian inference capabilities")
+    print("\nThis module provides pairwise regime-aware analysis")
+    print("for lambda3_zeroshot_tensor_field.py")
