@@ -1,15 +1,7 @@
 # ==========================================================
-# Λ³ Regime-Aware Bayesian Extension (Refactored)
+# Λ³ Regime-Aware Bayesian Extension (Fixed)
 # ----------------------------------------------------
-# Hierarchical regime detection and regime-specific Bayesian inference
-# For financial market structural analysis
-# 
-# REFACTORED: Complete structural tensor interactions preserved
-# across all market regimes with regime-specific prior adjustments
-#
-# Author: Extension for lambda3_zeroshot_tensor_field.py
-# License: MIT
-# Version: 2.0 (Refactored)
+# Fixed version with corrected array operations
 # ==========================================================
 
 import numpy as np
@@ -71,6 +63,26 @@ class HierarchicalRegimeConfig:
 # ===============================
 # HELPER FUNCTIONS
 # ===============================
+def calculate_returns(data: np.ndarray) -> np.ndarray:
+    """
+    Calculate percentage returns safely
+    
+    Parameters:
+    -----------
+    data : np.ndarray
+        Price or value data
+        
+    Returns:
+    --------
+    np.ndarray
+        Percentage returns (same length as input)
+    """
+    returns = np.zeros_like(data)
+    if len(data) > 1:
+        # Calculate returns for all elements except first
+        returns[1:] = (data[1:] - data[:-1]) / (np.abs(data[:-1]) + 1e-8)
+    return returns
+
 def create_regime_aware_config(
     base_config: L3Config,
     regime_name: str,
@@ -161,7 +173,7 @@ def merge_regime_results_with_base(
     # Add regime-specific enhancements
     merged['regime_analysis'] = regime_results.get('regime_analysis', {})
     merged['global_regimes'] = regime_results.get('global_regimes', None)
-    merged['regime_statistics'] = regime_results.get('regime_detector', {}).regime_features
+    merged['regime_statistics'] = regime_results.get('regime_detector', {}).regime_features if 'regime_detector' in regime_results else {}
     
     # Enhanced pairwise results with regime information
     if 'pairwise_results' in merged and 'regime_specific_results' in regime_results.get('regime_analysis', {}):
@@ -261,8 +273,9 @@ class HierarchicalRegimeDetector:
         unique, counts = np.unique(regimes, return_counts=True)
         print("\nGlobal Market Regime Distribution:")
         for r, count in zip(unique, counts):
-            regime_name = self.config.global_regime_names[r]
-            print(f"  {regime_name}: {count} periods ({count/len(regimes)*100:.1f}%)")
+            if r < len(self.config.global_regime_names):
+                regime_name = self.config.global_regime_names[r]
+                print(f"  {regime_name}: {count} periods ({count/len(regimes)*100:.1f}%)")
         
         # Calculate transition matrix
         self.transition_matrix = self._calculate_transition_matrix(regimes)
@@ -337,15 +350,21 @@ class HierarchicalRegimeDetector:
             corr_window = 20
             correlations = []
             
-            for i in range(len(all_tensions[0]) - corr_window):
+            for i in range(len(all_tensions[0]) - corr_window + 1):
                 window_tensors = [t[i:i+corr_window] for t in all_tensions]
-                # Average pairwise correlation in this window
-                corr_matrix = np.corrcoef(window_tensors)
-                avg_corr = (corr_matrix.sum() - len(corr_matrix)) / (len(corr_matrix) * (len(corr_matrix) - 1))
-                correlations.append(avg_corr)
+                try:
+                    # Average pairwise correlation in this window
+                    corr_matrix = np.corrcoef(window_tensors)
+                    avg_corr = (corr_matrix.sum() - len(corr_matrix)) / (len(corr_matrix) * (len(corr_matrix) - 1))
+                    correlations.append(avg_corr)
+                except:
+                    correlations.append(0.0)
             
             # Pad to match length
-            correlations = np.pad(correlations, (0, len(all_tensions[0]) - len(correlations)), 'edge')
+            if correlations:
+                correlations = np.pad(correlations, (0, len(all_tensions[0]) - len(correlations)), 'edge')
+            else:
+                correlations = np.zeros(len(all_tensions[0]))
             feature_list.append(correlations)
         
         # Stack all features
@@ -393,8 +412,12 @@ class HierarchicalRegimeDetector:
     
     def _smooth_regime_transitions(self, regimes: np.ndarray, window: int) -> np.ndarray:
         """Smooth regime transitions to reduce noise"""
-        from scipy.ndimage import median_filter
-        return median_filter(regimes, size=window)
+        try:
+            from scipy.ndimage import median_filter
+            return median_filter(regimes, size=window)
+        except:
+            # Fallback if scipy not available
+            return regimes
     
     def _calculate_global_regime_statistics(
         self,
@@ -411,21 +434,19 @@ class HierarchicalRegimeDetector:
             
             if n_points > 0:
                 stats = {
-                    'n_points': n_points,
+                    'n_points': int(n_points),
                     'frequency': n_points / len(regimes),
                     'avg_returns': {},
                     'avg_volatility': {},
                     'jump_intensity': {},
-                    'regime_name': self.config.global_regime_names[r]
+                    'regime_name': self.config.global_regime_names[r] if r < len(self.config.global_regime_names) else f'Regime_{r}'
                 }
                 
                 # Calculate per-series statistics
                 for name, features in features_dict.items():
-                    # Average returns (approximated by data differences)
+                    # Average returns using safe calculation
                     data = features.get('data', np.zeros(len(mask)))
-                    returns = np.zeros_like(data)
-                    returns[1:] = (data[1:] - data[:-1]) / (data[:-1] + 1e-8)
-                    returns[0] = 0  # 最初のリターンは0
+                    returns = calculate_returns(data)
                     stats['avg_returns'][name] = np.mean(returns[mask])
                     
                     # Average volatility (tension)
@@ -437,6 +458,16 @@ class HierarchicalRegimeDetector:
                     stats['jump_intensity'][name] = (pos_jumps + neg_jumps) / n_points
                 
                 self.regime_features[r] = stats
+            else:
+                # Empty regime
+                self.regime_features[r] = {
+                    'n_points': 0,
+                    'frequency': 0.0,
+                    'avg_returns': {},
+                    'avg_volatility': {},
+                    'jump_intensity': {},
+                    'regime_name': self.config.global_regime_names[r] if r < len(self.config.global_regime_names) else f'Regime_{r}'
+                }
     
     def _relabel_regimes_by_characteristics(
         self,
@@ -456,8 +487,16 @@ class HierarchicalRegimeDetector:
                 for name in ['Dow Jones', 'Nikkei 225', 'S&P 500']:
                     if name in features_dict:
                         data = features_dict[name]['data']
-                        ret = np.diff(data, prepend=data[0]) / (data[:-1] + 1e-8)
-                        returns.append(np.mean(ret[mask[:-1]]))
+                        # Use safe return calculation
+                        ret = calculate_returns(data)
+                        returns.append(np.mean(ret[mask]))
+                
+                # If no equity indices found, use all series
+                if not returns:
+                    for name, features in features_dict.items():
+                        data = features['data']
+                        ret = calculate_returns(data)
+                        returns.append(np.mean(ret[mask]))
                 
                 avg_return = np.mean(returns) if returns else 0
                 regime_returns.append((r, avg_return))
@@ -471,7 +510,7 @@ class HierarchicalRegimeDetector:
         relabel_map = {old_r: new_r for new_r, (old_r, _) in enumerate(regime_returns)}
         
         # Apply relabeling
-        new_regimes = np.array([relabel_map[r] for r in regimes])
+        new_regimes = np.array([relabel_map.get(r, r) for r in regimes])
         
         return new_regimes
     
@@ -481,7 +520,8 @@ class HierarchicalRegimeDetector:
         trans_mat = np.zeros((n_regimes, n_regimes))
         
         for i in range(len(regimes) - 1):
-            trans_mat[regimes[i], regimes[i+1]] += 1
+            if regimes[i] < n_regimes and regimes[i+1] < n_regimes:
+                trans_mat[regimes[i], regimes[i+1]] += 1
         
         # Normalize rows
         row_sums = trans_mat.sum(axis=1)
@@ -527,25 +567,37 @@ class HierarchicalRegimeDetector:
             
             # Normalize
             scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X)
+            try:
+                X_scaled = scaler.fit_transform(X)
+            except:
+                sub_regimes[g_regime] = np.zeros(n_points, dtype=int)
+                continue
             
             # Detect sub-regimes
-            if self.config.use_gmm:
-                model = GaussianMixture(
-                    n_components=min(self.config.n_sub_regimes, n_points // 30),
-                    covariance_type='diag',
-                    n_init=5,
-                    random_state=42
-                )
-            else:
-                model = KMeans(
-                    n_clusters=min(self.config.n_sub_regimes, n_points // 30),
-                    n_init=10,
-                    random_state=42
-                )
+            n_sub = min(self.config.n_sub_regimes, n_points // 30)
+            if n_sub < 2:
+                sub_regimes[g_regime] = np.zeros(n_points, dtype=int)
+                continue
             
-            sub_labels = model.fit_predict(X_scaled)
-            sub_regimes[g_regime] = sub_labels
+            try:
+                if self.config.use_gmm:
+                    model = GaussianMixture(
+                        n_components=n_sub,
+                        covariance_type='diag',
+                        n_init=5,
+                        random_state=42
+                    )
+                else:
+                    model = KMeans(
+                        n_clusters=n_sub,
+                        n_init=10,
+                        random_state=42
+                    )
+                
+                sub_labels = model.fit_predict(X_scaled)
+                sub_regimes[g_regime] = sub_labels
+            except:
+                sub_regimes[g_regime] = np.zeros(n_points, dtype=int)
             
         return sub_regimes
     
@@ -559,8 +611,8 @@ class HierarchicalRegimeDetector:
             return base_config
         
         # Use helper function
-        regime_name = self.config.global_regime_names[regime]
-        n_points = self.regime_features[regime]['n_points'] if hasattr(self, 'regime_features') else 100
+        regime_name = self.config.global_regime_names[regime] if regime < len(self.config.global_regime_names) else 'Unknown'
+        n_points = self.regime_features[regime]['n_points'] if hasattr(self, 'regime_features') and regime in self.regime_features else 100
         
         return create_regime_aware_config(base_config, regime_name, n_points)
 
@@ -670,7 +722,7 @@ class RegimeAwareBayesianAnalysis:
         for regime_idx in range(self.h_config.n_global_regimes):
             regime_mask = (global_regimes == regime_idx)
             n_regime_points = np.sum(regime_mask)
-            regime_name = self.h_config.global_regime_names[regime_idx]
+            regime_name = self.h_config.global_regime_names[regime_idx] if regime_idx < len(self.h_config.global_regime_names) else f'Regime_{regime_idx}'
             
             if n_regime_points < self.h_config.min_regime_size:
                 print(f"\nSkipping {regime_name} regime: insufficient data ({n_regime_points} points)")
@@ -701,6 +753,10 @@ class RegimeAwareBayesianAnalysis:
                         name_a: self._extract_regime_features(features_dict[name_a], regime_mask),
                         name_b: self._extract_regime_features(features_dict[name_b], regime_mask)
                     }
+                    
+                    # Check if we have enough data
+                    if len(regime_data[name_a]) < 10 or len(regime_data[name_b]) < 10:
+                        continue
                     
                     # Check for sub-regimes
                     pair_features_combined = {
@@ -1101,10 +1157,10 @@ class RegimeAwareBayesianAnalysis:
             if global_regimes[i] != global_regimes[i-1]:
                 transitions.append({
                     'index': i,
-                    'from_regime': global_regimes[i-1],
-                    'to_regime': global_regimes[i],
-                    'from_name': self.h_config.global_regime_names[global_regimes[i-1]],
-                    'to_name': self.h_config.global_regime_names[global_regimes[i]]
+                    'from_regime': int(global_regimes[i-1]),
+                    'to_regime': int(global_regimes[i]),
+                    'from_name': self.h_config.global_regime_names[global_regimes[i-1]] if global_regimes[i-1] < len(self.h_config.global_regime_names) else f'Regime_{global_regimes[i-1]}',
+                    'to_name': self.h_config.global_regime_names[global_regimes[i]] if global_regimes[i] < len(self.h_config.global_regime_names) else f'Regime_{global_regimes[i]}'
                 })
         
         print(f"Found {len(transitions)} regime transitions")
@@ -1121,8 +1177,8 @@ class RegimeAwareBayesianAnalysis:
                 pre_jumps = np.sum(features['delta_LambdaC_pos'][max(0, idx-window):idx])
                 post_jumps = np.sum(features['delta_LambdaC_pos'][idx:min(len(features['delta_LambdaC_pos']), idx+window)])
                 
-                pre_tension = np.mean(features['rho_T'][max(0, idx-window):idx])
-                post_tension = np.mean(features['rho_T'][idx:min(len(features['rho_T']), idx+window)])
+                pre_tension = np.mean(features['rho_T'][max(0, idx-window):idx]) if idx > 0 else 0
+                post_tension = np.mean(features['rho_T'][idx:min(len(features['rho_T']), idx+window)]) if idx < len(features['rho_T']) else 0
                 
                 print(f"  {name}: Jumps {pre_jumps}→{post_jumps}, Tension {pre_tension:.3f}→{post_tension:.3f}")
         
@@ -1151,7 +1207,8 @@ class RegimeAwareBayesianAnalysis:
             for regime_idx, regime_results in self.regime_results.items():
                 if pair_key in regime_results:
                     coeffs = regime_results[pair_key]['interaction_coefficients']
-                    pair_comparison[self.h_config.global_regime_names[regime_idx]] = coeffs['regime_specific']['interaction_strength']
+                    regime_name = self.h_config.global_regime_names[regime_idx] if regime_idx < len(self.h_config.global_regime_names) else f'Regime_{regime_idx}'
+                    pair_comparison[regime_name] = coeffs['regime_specific']['interaction_strength']
             
             if len(pair_comparison) > 1:
                 comparison['interaction_changes'][pair_key] = pair_comparison
@@ -1241,8 +1298,9 @@ def plot_regime_timeline(
     
     # Plot regime blocks
     for i in range(len(global_regimes)):
-        regime = global_regimes[i]
-        ax1.axvspan(i, i+1, facecolor=colors[regime], alpha=0.6)
+        regime = int(global_regimes[i])
+        if regime < len(colors):
+            ax1.axvspan(i, i+1, facecolor=colors[regime], alpha=0.6)
     
     # Add regime labels
     ax1.set_xlim(0, len(global_regimes))
@@ -1253,7 +1311,7 @@ def plot_regime_timeline(
     # Add legend
     from matplotlib.patches import Patch
     legend_elements = [Patch(facecolor=colors[i], label=regime_names[i]) 
-                      for i in range(len(regime_names))]
+                      for i in range(min(len(colors), len(regime_names)))]
     ax1.legend(handles=legend_elements, loc='upper right')
     
     # Highlight transitions
@@ -1270,8 +1328,9 @@ def plot_regime_timeline(
     if series_data:
         for name, data in list(series_data.items())[:3]:  # Plot first 3 series
             # Normalize for visualization
-            data_norm = (data - np.mean(data)) / np.std(data)
-            ax2.plot(data_norm, label=name, alpha=0.7)
+            if len(data) > 0:
+                data_norm = (data - np.mean(data)) / (np.std(data) + 1e-8)
+                ax2.plot(data_norm, label=name, alpha=0.7)
         
         ax2.set_xlabel('Time')
         ax2.set_ylabel('Normalized Value')
@@ -1290,6 +1349,10 @@ def plot_regime_interaction_heatmap(
     """Plot interaction strength heatmaps for each regime"""
     
     n_regimes = len(regime_results)
+    if n_regimes == 0:
+        print("No regime results to plot")
+        return
+    
     fig, axes = plt.subplots(1, n_regimes, figsize=(6*n_regimes, 5))
     
     if n_regimes == 1:
@@ -1300,6 +1363,10 @@ def plot_regime_interaction_heatmap(
     for regime_results_dict in regime_results.values():
         all_pairs.update(regime_results_dict.keys())
     all_pairs = sorted(list(all_pairs))
+    
+    if not all_pairs:
+        print("No pair results found")
+        return
     
     # Extract series names
     series_names = set()
@@ -1318,22 +1385,25 @@ def plot_regime_interaction_heatmap(
         for pair_key, results in regime_data.items():
             if 'interaction_coefficients' in results:
                 names = pair_key.split('_vs_')
-                i = series_names.index(names[0])
-                j = series_names.index(names[1])
-                strength = results['interaction_coefficients']['regime_specific']['interaction_strength']
-                interaction_matrix[i, j] = strength
-                interaction_matrix[j, i] = strength  # Symmetric for visualization
+                if len(names) == 2 and names[0] in series_names and names[1] in series_names:
+                    i = series_names.index(names[0])
+                    j = series_names.index(names[1])
+                    strength = results['interaction_coefficients']['regime_specific']['interaction_strength']
+                    interaction_matrix[i, j] = strength
+                    interaction_matrix[j, i] = strength  # Symmetric for visualization
         
         # Plot heatmap
+        max_val = np.max(np.abs(interaction_matrix)) if np.any(interaction_matrix) else 1
         im = ax.imshow(interaction_matrix, cmap='RdBu_r', aspect='auto',
-                       vmin=-np.max(np.abs(interaction_matrix)), 
-                       vmax=np.max(np.abs(interaction_matrix)))
+                       vmin=-max_val, vmax=max_val)
         
         ax.set_xticks(range(n_series))
         ax.set_yticks(range(n_series))
         ax.set_xticklabels(series_names, rotation=45, ha='right')
         ax.set_yticklabels(series_names)
-        ax.set_title(f'{regime_names[regime_idx]} Regime')
+        
+        regime_name = regime_names[regime_idx] if regime_idx < len(regime_names) else f'Regime {regime_idx}'
+        ax.set_title(f'{regime_name} Regime')
         
         # Add colorbar
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -1406,16 +1476,19 @@ def run_lambda3_regime_aware_analysis(
     
     # Visualize results
     if verbose:
-        plot_regime_timeline(
-            regime_results['global_regimes'],
-            hierarchical_config.global_regime_names,
-            series_dict
-        )
-        
-        plot_regime_interaction_heatmap(
-            regime_results['regime_specific_results'],
-            hierarchical_config.global_regime_names
-        )
+        try:
+            plot_regime_timeline(
+                regime_results['global_regimes'],
+                hierarchical_config.global_regime_names,
+                series_dict
+            )
+            
+            plot_regime_interaction_heatmap(
+                regime_results['regime_specific_results'],
+                hierarchical_config.global_regime_names
+            )
+        except Exception as e:
+            print(f"Error in visualization: {str(e)}")
     
     # Compile complete results
     results = {
@@ -1434,7 +1507,7 @@ def run_lambda3_regime_aware_analysis(
 # EXAMPLE USAGE
 # ===============================
 if __name__ == "__main__":
-    print("Lambda³ Regime-Aware Extension Module (Refactored)")
+    print("Lambda³ Regime-Aware Extension Module (Fixed)")
     print("="*60)
     
     # Example configuration
@@ -1456,5 +1529,5 @@ if __name__ == "__main__":
     print(f"  Regime-specific priors: {h_config.regime_specific_priors}")
     print(f"  Adaptive sampling: {h_config.adaptive_sampling}")
     
-    print("\nREFACTORED: Complete structural tensor interactions preserved")
-    print("across all market regimes with regime-specific adjustments")
+    print("\nFIXED: Array operations corrected for safe return calculations")
+    print("Complete structural tensor interactions preserved across all regimes")
