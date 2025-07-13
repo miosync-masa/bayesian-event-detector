@@ -3503,7 +3503,7 @@ if __name__ == '__main__':
 
         # Colabで必要なライブラリのインストール
         print("\n📦 Installing required packages...")
-        !pip install -q pymc arviz yfinance networkx numba pandas numpy matplotlib seaborn scikit-learn
+       
         print("✅ Package installation complete")
 
     else:
