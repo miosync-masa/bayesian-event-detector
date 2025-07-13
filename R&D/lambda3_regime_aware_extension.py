@@ -244,7 +244,7 @@ class HierarchicalRegimeDetector:
     @njit
     def _rolling_std(data: np.ndarray, window: int) -> np.ndarray:
         """JIT-compiled rolling standard deviation"""
-        n = len(data)
+        n = data.shape[0]  # Numba-compatible
         result = np.empty(n)
         
         for i in range(n):
@@ -252,9 +252,9 @@ class HierarchicalRegimeDetector:
             end = i + 1
             subset = data[start:end]
             
-            if len(subset) > 1:
+            if subset_len > 1:
                 mean = np.mean(subset)
-                variance = np.sum((subset - mean) ** 2) / len(subset)
+                variance = np.sum((subset - mean) ** 2) / subset_len
                 result[i] = np.sqrt(variance)
             else:
                 result[i] = 0.0
@@ -265,7 +265,7 @@ class HierarchicalRegimeDetector:
     @njit
     def _rolling_mean(data: np.ndarray, window: int) -> np.ndarray:
         """JIT-compiled rolling mean"""
-        n = len(data)
+        n = data.shape[0]  # Numba-compatible
         result = np.empty(n)
         
         for i in range(n):
