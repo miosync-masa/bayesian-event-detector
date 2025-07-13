@@ -202,15 +202,22 @@ def load_csv_data(filepath: str, time_column: Optional[str] = None,
     return series_dict
 
 # ===============================
-# SECTION 1: JIT-COMPILED CORE FUNCTIONS
+# SECTION 1: JIT-COMPILED CORE FUNCTIONS (NUMBA-FIXED VERSION)
 # ===============================
+# 修正版：len() → .shape[0] または .size に変更
+# Lambda³ 構造テンソル解析のための高速化関数群
+
+from numba import jit, njit, prange
+import numpy as np
+from typing import Tuple
 
 @njit
 def calculate_diff_and_threshold(data: np.ndarray, percentile: float) -> Tuple[np.ndarray, float]:
     """JIT-compiled difference calculation and threshold computation."""
-    diff = np.empty(len(data))
+    n = data.shape[0]  # Numba-compatible
+    diff = np.empty(n)
     diff[0] = 0
-    for i in range(1, len(data)):
+    for i in range(1, n):
         diff[i] = data[i] - data[i-1]
 
     abs_diff = np.abs(diff)
@@ -220,7 +227,7 @@ def calculate_diff_and_threshold(data: np.ndarray, percentile: float) -> Tuple[n
 @njit
 def detect_jumps(diff: np.ndarray, threshold: float) -> Tuple[np.ndarray, np.ndarray]:
     """JIT-compiled jump detection based on threshold."""
-    n = len(diff)
+    n = diff.shape[0]  # Numba-compatible
     pos_jumps = np.zeros(n, dtype=np.int32)
     neg_jumps = np.zeros(n, dtype=np.int32)
 
@@ -235,7 +242,7 @@ def detect_jumps(diff: np.ndarray, threshold: float) -> Tuple[np.ndarray, np.nda
 @njit
 def calculate_local_std(data: np.ndarray, window: int) -> np.ndarray:
     """JIT-compiled local standard deviation calculation."""
-    n = len(data)
+    n = data.shape[0]  # Numba-compatible
     local_std = np.empty(n)
 
     for i in range(n):
@@ -243,16 +250,20 @@ def calculate_local_std(data: np.ndarray, window: int) -> np.ndarray:
         end = min(n, i + window + 1)
 
         subset = data[start:end]
-        mean = np.mean(subset)
-        variance = np.sum((subset - mean) ** 2) / len(subset)
-        local_std[i] = np.sqrt(variance)
+        subset_len = end - start  # Avoid len() call
+        if subset_len > 0:
+            mean = np.mean(subset)
+            variance = np.sum((subset - mean) ** 2) / subset_len
+            local_std[i] = np.sqrt(variance)
+        else:
+            local_std[i] = 0.0
 
     return local_std
 
 @njit
 def calculate_rho_t(data: np.ndarray, window: int) -> np.ndarray:
     """JIT-compiled tension scalar (ρT) calculation."""
-    n = len(data)
+    n = data.shape[0]  # Numba-compatible
     rho_t = np.empty(n)
 
     for i in range(n):
@@ -260,9 +271,10 @@ def calculate_rho_t(data: np.ndarray, window: int) -> np.ndarray:
         end = i + 1
 
         subset = data[start:end]
-        if len(subset) > 1:
+        subset_len = end - start  # Avoid len() call
+        if subset_len > 1:
             mean = np.mean(subset)
-            variance = np.sum((subset - mean) ** 2) / len(subset)
+            variance = np.sum((subset - mean) ** 2) / subset_len
             rho_t[i] = np.sqrt(variance)
         else:
             rho_t[i] = 0.0
@@ -272,13 +284,16 @@ def calculate_rho_t(data: np.ndarray, window: int) -> np.ndarray:
 @njit
 def sync_rate_at_lag(series_a: np.ndarray, series_b: np.ndarray, lag: int) -> float:
     """JIT-compiled synchronization rate calculation for a specific lag."""
+    len_a = series_a.shape[0]  # Numba-compatible
+    len_b = series_b.shape[0]  # Numba-compatible
+    
     if lag < 0:
-        if -lag < len(series_a):
+        if -lag < len_a:
             return np.mean(series_a[-lag:] * series_b[:lag])
         else:
             return 0.0
     elif lag > 0:
-        if lag < len(series_b):
+        if lag < len_b:
             return np.mean(series_a[:-lag] * series_b[lag:])
         else:
             return 0.0
@@ -318,7 +333,7 @@ def detect_local_global_jumps(
     Hierarchical structural change detection
     Lambda³ theory: Hierarchy in structural tensor changes
     """
-    n = len(data)
+    n = data.shape[0]  # Numba-compatible
     diff = np.empty(n)
     diff[0] = 0
     for i in range(1, n):
@@ -335,7 +350,8 @@ def detect_local_global_jumps(
         local_end = min(n, i + local_window + 1)
         local_subset = np.abs(diff[local_start:local_end])
 
-        if len(local_subset) > 0:
+        subset_len = local_end - local_start  # Avoid len() call
+        if subset_len > 0:
             local_threshold = np.percentile(local_subset, local_percentile)
             if diff[i] > local_threshold:
                 local_pos[i] = 1
