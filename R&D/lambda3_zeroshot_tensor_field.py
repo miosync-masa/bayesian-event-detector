@@ -3489,6 +3489,7 @@ def lambda3_streaming_analysis(
 # ===============================
 # Main Execution for Google Colab
 # ===============================
+"""
 if __name__ == '__main__':
 
     warnings.filterwarnings('ignore')
@@ -3668,3 +3669,4 @@ if __name__ == '__main__':
             print("\n💡 Tip: Results are stored in the 'results' variable")
             print("📊 You can explore the data structure with: results.keys()")
             print("📈 Use built-in plot functions like: plot_lambda3_summary(results)")
+        """
