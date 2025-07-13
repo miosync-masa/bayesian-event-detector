@@ -10,9 +10,6 @@
 # Author: Masamichi Iizumi (Miosync, Inc.)
 # Core Theory: Lambda³ (Λ³) Structural Tensor Dynamics
 # ==========================================================
-# ----------------------------------------------------
-# Organized Import Statements for Structural Tensor Analysis
-# ==========================================================
 
 # ===============================
 # Standard Library Imports
@@ -467,25 +464,25 @@ class Lambda3BayesianLogger:
     Lambda³ Bayesian推定の構造的ログシステム
     構造テンソル空間における不確実性の定量化
     """
-    
+
     def __init__(self, hdi_prob: float = 0.94):
         self.hdi_prob = hdi_prob
         self.all_results = {}
         self.structural_summary = {}
-        
+
     def log_trace(self, trace, model_id: str, model_type: str = "general",
                   series_names: List[str] = None, verbose: bool = True) -> Dict[str, any]:
         """
         トレースから構造的パラメータのHDIを抽出・記録
         """
         summary = az.summary(trace, hdi_prob=self.hdi_prob)
-        
+
         # HDI情報の抽出
         hdi_data = self._extract_hdi_data(summary)
-        
+
         # 構造的分類
         structured_results = self._classify_parameters(hdi_data, model_type, series_names)
-        
+
         # 記録
         self.all_results[model_id] = {
             'raw_hdi': hdi_data,
@@ -494,20 +491,20 @@ class Lambda3BayesianLogger:
             'series': series_names,
             'timestamp': pd.Timestamp.now()
         }
-        
+
         # ログ出力
         if verbose:
             self._display_structured_log(model_id, structured_results, series_names)
-            
+
         return structured_results
-    
+
     def _extract_hdi_data(self, summary: pd.DataFrame) -> Dict[str, Dict[str, float]]:
         """HDIデータの抽出"""
         hdi_data = {}
-        
+
         hdi_low_col = f'hdi_{(1-self.hdi_prob)/2*100:.0f}%'
         hdi_high_col = f'hdi_{(1+self.hdi_prob)/2*100:.0f}%'
-        
+
         for param in summary.index:
             hdi_data[param] = {
                 'mean': summary.loc[param, 'mean'],
@@ -517,10 +514,10 @@ class Lambda3BayesianLogger:
                 'width': summary.loc[param, hdi_high_col] - summary.loc[param, hdi_low_col],
                 'excludes_zero': not (summary.loc[param, hdi_low_col] < 0 < summary.loc[param, hdi_high_col])
             }
-            
+
         return hdi_data
-    
-    def _classify_parameters(self, hdi_data: Dict, model_type: str, 
+
+    def _classify_parameters(self, hdi_data: Dict, model_type: str,
                            series_names: List[str] = None) -> Dict[str, any]:
         """パラメータの構造的分類"""
         classified = {
@@ -531,36 +528,36 @@ class Lambda3BayesianLogger:
             'temporal': {},          # 時間的効果
             'observation': {}        # 観測モデル
         }
-        
+
         for param, data in hdi_data.items():
             # ΔΛC (構造変化)
             if any(x in param for x in ['dLC', 'delta_Lambda', '_pos', '_neg']):
                 classified['structural_changes'][param] = data
-                
+
             # ρT (張力スカラー)
             elif any(x in param for x in ['rhoT', 'rho_T', 'tension', 'stress']):
                 classified['tension_scalars'][param] = data
-                
+
             # 相互作用
             elif any(x in param for x in ['interact', 'cross', '_ab_', '_ba_']):
                 classified['interactions'][param] = data
-                
+
             # 階層的効果
-            elif any(x in param for x in ['alpha_', 'escalation', 'deescalation', 
+            elif any(x in param for x in ['alpha_', 'escalation', 'deescalation',
                                         'local_', 'global_', 'hierarchical']):
                 classified['hierarchical'][param] = data
-                
+
             # 時間的効果
             elif any(x in param for x in ['time', 'lag', 'temporal']):
                 classified['temporal'][param] = data
-                
+
             # 観測モデル
             elif any(x in param for x in ['sigma', 'rho_ab', 'correlation']):
                 classified['observation'][param] = data
-                
+
         return classified
-    
-    def _display_structured_log(self, model_id: str, structured: Dict, 
+
+    def _display_structured_log(self, model_id: str, structured: Dict,
                                series_names: List[str] = None):
         """構造化されたログの表示"""
         print(f"\n{'='*80}")
@@ -569,46 +566,46 @@ class Lambda3BayesianLogger:
             print(f"Series: {' ⇄ '.join(series_names)}")
         print(f"HDI Probability: {self.hdi_prob*100:.0f}%")
         print(f"{'='*80}")
-        
+
         # 1. 構造変化パラメータ (ΔΛC)
         if structured['structural_changes']:
             print("\n[Structural Changes - ΔΛC]")
             self._display_parameter_group(structured['structural_changes'])
-            
+
         # 2. 張力スカラー (ρT)
         if structured['tension_scalars']:
             print("\n[Tension Scalars - ρT]")
             self._display_parameter_group(structured['tension_scalars'])
-            
+
         # 3. 相互作用
         if structured['interactions']:
             print("\n[Structural Interactions]")
             self._display_interaction_parameters(structured['interactions'], series_names)
-            
+
         # 4. 階層的効果
         if structured['hierarchical']:
             print("\n[Hierarchical Effects]")
             self._display_parameter_group(structured['hierarchical'])
-            
+
         # 5. 統計的サマリー
         self._display_statistical_summary(structured)
-        
+
     def _display_parameter_group(self, params: Dict):
         """パラメータグループの表示"""
         print(f"{'Parameter':<30} {'Mean':>8} {'HDI_Low':>8} {'HDI_High':>8} {'Signif':>8}")
         print("-" * 70)
-        
+
         for param, data in params.items():
             signif = "YES" if data['excludes_zero'] else "NO"
             print(f"{param:<30} {data['mean']:>8.3f} {data['hdi_low']:>8.3f} "
                   f"{data['hdi_high']:>8.3f} {signif:>8}")
-                  
+
     def _display_interaction_parameters(self, interactions: Dict, series_names: List[str]):
         """相互作用パラメータの特別表示"""
         if not series_names or len(series_names) < 2:
             self._display_parameter_group(interactions)
             return
-            
+
         # 方向別に整理
         directions = {}
         for param, data in interactions.items():
@@ -618,11 +615,11 @@ class Lambda3BayesianLogger:
                 direction = f"{series_names[1]} → {series_names[0]}"
             else:
                 direction = "Unknown"
-                
+
             if direction not in directions:
                 directions[direction] = {}
             directions[direction][param] = data
-            
+
         for direction, params in directions.items():
             print(f"\n  {direction}:")
             for param, data in params.items():
@@ -631,48 +628,48 @@ class Lambda3BayesianLogger:
                 signif = "✓" if data['excludes_zero'] else "✗"
                 print(f"    {effect_type:<10}: {strength:>6.3f} [{data['hdi_low']:>6.3f}, "
                       f"{data['hdi_high']:>6.3f}] {signif}")
-                      
+
     def _display_statistical_summary(self, structured: Dict):
         """統計的サマリー"""
         print("\n[Statistical Summary]")
-        
+
         # 有意なパラメータ数
         total_params = sum(len(group) for group in structured.values())
         signif_params = sum(
             sum(1 for p in group.values() if p['excludes_zero'])
             for group in structured.values()
         )
-        
+
         print(f"  Total parameters: {total_params}")
         print(f"  Significant parameters: {signif_params} ({signif_params/total_params*100:.1f}%)")
-        
+
         # 最大効果サイズ
         all_effects = []
         for group in structured.values():
             for param, data in group.items():
                 if data['excludes_zero']:
                     all_effects.append((param, abs(data['mean'])))
-                    
+
         if all_effects:
             all_effects.sort(key=lambda x: x[1], reverse=True)
             print("\n  Top 3 effect sizes:")
             for param, effect in all_effects[:3]:
                 print(f"    {param}: {effect:.3f}")
-                
+
     def generate_summary_report(self) -> pd.DataFrame:
         """全モデルのサマリーレポート生成"""
         rows = []
-        
+
         for model_id, results in self.all_results.items():
             structured = results['structured']
-            
+
             # 統計量の集計
             n_params = sum(len(group) for group in structured.values())
             n_signif = sum(
                 sum(1 for p in group.values() if p['excludes_zero'])
                 for group in structured.values()
             )
-            
+
             # 最大効果
             max_effect = 0
             max_param = ""
@@ -681,7 +678,7 @@ class Lambda3BayesianLogger:
                     if abs(data['mean']) > max_effect:
                         max_effect = abs(data['mean'])
                         max_param = param
-                        
+
             rows.append({
                 'model_id': model_id,
                 'model_type': results['model_type'],
@@ -693,7 +690,7 @@ class Lambda3BayesianLogger:
                 'max_effect_size': max_effect,
                 'timestamp': results['timestamp']
             })
-            
+
         return pd.DataFrame(rows)
 
 # ===============================
@@ -757,7 +754,7 @@ def fit_l3_bayesian_regression_asymmetric(
     if bayes_logger is not None:
         if model_name is None:
             model_name = f"asymmetric_regression_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
-        
+
         bayes_logger.log_trace(
             trace,
             model_id=model_name,
@@ -1968,14 +1965,14 @@ def analyze_all_pairwise_interactions(
     Comprehensive pairwise interaction analysis
     Lambda³ theory: Exhaustive structural tensor interaction analysis
     """
-    
+
     # ロガーが提供されていない場合は作成
     if bayes_logger is None:
         bayes_logger = Lambda3BayesianLogger(hdi_prob=config.hdi_prob)
-    
+
     series_names = list(series_dict.keys())
     n_series = len(series_names)
-    
+
     print(f"\n{'='*80}")
     print("All Pairwise Interaction Analysis")
     print(f"{'='*80}")
@@ -2019,13 +2016,13 @@ def analyze_all_pairwise_interactions(
             # HDIロギング
             model_id = f"pair_{pair_idx}_{name_a}_vs_{name_b}"
             hdi_results = bayes_logger.log_trace(
-                trace, 
+                trace,
                 model_id=model_id,
                 model_type="pairwise",
                 series_names=[name_a, name_b],
                 verbose=True  # 詳細ログ出力
             )
-            
+
             # HDI結果を保存
             pair_key = f"{name_a}_vs_{name_b}"
             all_pairwise_results['hdi_results'][pair_key] = hdi_results
@@ -2091,7 +2088,7 @@ def analyze_all_pairwise_interactions(
             print(f"  {name_a} → {name_b}: {strength_a_to_b:.3f}")
             print(f"  {name_b} → {name_a}: {strength_b_to_a:.3f}")
             print(f"  Asymmetry: {asymmetry:.3f}")
-            
+
             # 主要な相互作用の統計的有意性を表示
             if 'interactions' in hdi_results:
                 signif_interactions = [
@@ -2158,7 +2155,7 @@ def analyze_all_pairwise_interactions(
     summary_df = bayes_logger.generate_summary_report()
     if not summary_df.empty:
         print(summary_df.to_string(index=False))
-    
+
     # Visualization placeholder
     # visualize_all_pairwise_results(all_pairwise_results, series_names)
 
@@ -2229,7 +2226,7 @@ def complete_hierarchical_analysis(
 
         # Hierarchical separation dynamics analysis (ロガーを渡す)
         separation_results = analyze_hierarchical_separation_dynamics(
-            name, data, structural_changes, config, 
+            name, data, structural_changes, config,
             verbose=verbose,
             bayes_logger=bayes_logger  # 追加
         )
@@ -2272,7 +2269,7 @@ def complete_hierarchical_analysis(
             try:
                 # Hierarchical synchronization analysis with logging
                 sync_results = analyze_hierarchical_synchronization(
-                    first_changes, 
+                    first_changes,
                     second_changes,
                     first_series,
                     second_series,
@@ -2280,7 +2277,7 @@ def complete_hierarchical_analysis(
                     verbose=verbose,
                     bayes_logger=bayes_logger  # 追加
                 )
-                
+
                 results['hierarchical_synchronization'] = sync_results
 
                 # Detect basic causality
@@ -2373,7 +2370,7 @@ def analyze_hierarchical_synchronization(
             data_dict, features_dict, config,
             series_pair=(series_name_1, series_name_2)
         )
-        
+
         # HDIロギング
         if bayes_logger is not None:
             model_id = f"hierarchical_sync_{series_name_1}_vs_{series_name_2}"
@@ -2384,7 +2381,7 @@ def analyze_hierarchical_synchronization(
                 series_names=[series_name_1, series_name_2],
                 verbose=verbose
             )
-        
+
         # Extract interaction coefficients
         interaction_coeffs = extract_interaction_coefficients(
             trace, [series_name_1, series_name_2]
@@ -3030,7 +3027,9 @@ def run_lambda3_analysis(
     data_source: Union[str, Dict[str, np.ndarray]],
     config: L3Config = None,
     target_series: List[str] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    analysis_type: str = 'standard',  # 新パラメータ！
+    **kwargs  # 拡張用の追加パラメータ
 ) -> Dict[str, Any]:
     """
     Lambda³統合分析 - フル解析版
@@ -3046,12 +3045,78 @@ def run_lambda3_analysis(
         分析対象系列名（Noneの場合は全系列）
     verbose : bool
         詳細出力フラグ
+    analysis_type : str
+        'standard': 標準分析（デフォルト）
+        'regime_aware': レジーム認識型分析
+        'cloud_scale': クラウドスケール並列分析
+    **kwargs : 
+        拡張分析用の追加パラメータ
+        - hierarchical_config: レジーム分析用設定
+        - cloud_config: クラウド分析用設定
+        - scale: 'small', 'medium', 'large'
 
     Returns:
     --------
     Dict[str, Any]
         統合分析結果（Bayesian HDI含む）
     """
+    
+    # 拡張分析モードの処理
+    if analysis_type == 'regime_aware':
+        try:
+            from lambda3_regime_aware_extension import (
+                run_lambda3_regime_aware_analysis,
+                HierarchicalRegimeConfig
+            )
+            
+            # レジーム設定の取得または作成
+            hierarchical_config = kwargs.get('hierarchical_config')
+            if hierarchical_config is None:
+                hierarchical_config = HierarchicalRegimeConfig()
+            
+            return run_lambda3_regime_aware_analysis(
+                data_source=data_source,
+                base_config=config,
+                hierarchical_config=hierarchical_config,
+                target_series=target_series,
+                max_pairs=kwargs.get('max_pairs', 5),
+                verbose=verbose
+            )
+            
+        except ImportError:
+            print("Warning: Regime-aware extension not found. Falling back to standard analysis.")
+            analysis_type = 'standard'
+    
+    elif analysis_type == 'cloud_scale':
+        try:
+            from lambda3_cloud_parallel import (
+                run_lambda3_cloud_scale,
+                CloudScaleConfig,
+                ExecutionBackend
+            )
+            import asyncio
+            
+            # クラウド設定の取得または作成
+            cloud_config = kwargs.get('cloud_config')
+            if cloud_config is None:
+                cloud_config = CloudScaleConfig()
+            
+            scale = kwargs.get('scale', 'medium')
+            backend = kwargs.get('backend', ExecutionBackend.LOCAL_MULTIPROCESS)
+            
+            return asyncio.run(run_lambda3_cloud_scale(
+                data_source=data_source,
+                scale=scale,
+                backend=backend,
+                l3_config=config,
+                cloud_config=cloud_config
+            ))
+            
+        except ImportError:
+            print("Warning: Cloud-scale extension not found. Falling back to standard analysis.")
+            analysis_type = 'standard'
+    
+    # 以下、既存の標準分析コード（そのまま）
     if config is None:
         config = L3Config()
 
@@ -3075,7 +3140,7 @@ def run_lambda3_analysis(
 
     # Bayesianロガーの初期化
     bayes_logger = Lambda3BayesianLogger(hdi_prob=config.hdi_prob)
-    
+
     results = {
         'series_dict': series_dict,
         'series_names': series_names,
@@ -3105,7 +3170,7 @@ def run_lambda3_analysis(
         print("\n[Stage 2] Hierarchical Structural Analysis")
 
     hierarchical_results = complete_hierarchical_analysis(
-        series_dict, config, 
+        series_dict, config,
         verbose=verbose,
         bayes_logger=bayes_logger
     )
@@ -3115,9 +3180,9 @@ def run_lambda3_analysis(
     if len(series_names) >= 2:
         if verbose:
             print("\n[Stage 3] Pairwise Interaction Analysis")
-            
+
         pairwise_results = analyze_all_pairwise_interactions(
-            series_dict, features_dict, config, 
+            series_dict, features_dict, config,
             max_pairs=5,
             bayes_logger=bayes_logger
         )
@@ -3174,22 +3239,22 @@ def run_lambda3_analysis(
         print("\n" + "="*80)
         print("Lambda³ Analysis Summary")
         print("="*80)
-        
+
         # 基本統計
         print(f"\nData Summary:")
         print(f"  Series: {len(series_names)}")
         print(f"  Length: {len(series_dict[series_names[0]])}")
-        
+
         # 構造変化統計
         total_pos = sum(np.sum(f['delta_LambdaC_pos']) for f in features_dict.values())
         total_neg = sum(np.sum(f['delta_LambdaC_neg']) for f in features_dict.values())
         avg_tension = np.mean([np.mean(f['rho_T']) for f in features_dict.values()])
-        
+
         print(f"\nStructural Change Statistics:")
         print(f"  Total ΔΛC⁺: {total_pos}")
         print(f"  Total ΔΛC⁻: {total_neg}")
         print(f"  Average ρT: {avg_tension:.3f}")
-        
+
         # 階層的分析サマリー
         if 'hierarchical_results' in results:
             print(f"\nHierarchical Analysis:")
@@ -3198,7 +3263,7 @@ def run_lambda3_analysis(
                     metrics = hierarchical_results[name]['hierarchy_metrics']
                     print(f"  {name}: Local={metrics['local_dominance']:.2f}, "
                           f"Global={metrics['global_dominance']:.2f}")
-        
+
         # ペアワイズ分析サマリー
         if 'pairwise_results' in results and 'summary' in pairwise_results:
             summary = pairwise_results['summary']
@@ -3207,26 +3272,26 @@ def run_lambda3_analysis(
             print(f"  Max asymmetry: {summary['max_asymmetry']:.3f}")
             if summary['strongest_pair']:
                 print(f"  Strongest: {summary['strongest_pair']['pair']}")
-        
+
         # レジーム分析サマリー
         if 'regime_results' in results:
             print(f"\nRegime Detection:")
             for name in list(regime_results.keys())[:2]:
                 n_regimes = len(set(regime_results[name]['labels']))
                 print(f"  {name}: {n_regimes} regimes")
-        
+
         # 危機検出サマリー
         if 'crisis_results' in results:
             n_episodes = len(crisis_results['crisis_episodes'])
             print(f"\nCrisis Episodes: {n_episodes}")
-        
+
         # 因果分析サマリー
         if 'causality_results' in results and 'summary' in causality_results:
             causal_summary = causality_results['summary']
             print(f"\nCausality:")
             print(f"  Strongest: {causal_summary.get('strongest_direction', 'N/A')}")
             print(f"  Strength: {causal_summary.get('strongest_strength', 0):.3f}")
-        
+
         # Bayesian HDIサマリー
         print(f"\n{'='*80}")
         print("BAYESIAN HDI SUMMARY REPORT")
@@ -3236,7 +3301,7 @@ def run_lambda3_analysis(
             print(summary_df.to_string(index=False))
         else:
             print("No Bayesian models were fitted.")
-            
+
         print("\n" + "="*80)
         print("Analysis Complete - Structural tensor dynamics revealed")
         print("="*80)
@@ -3328,12 +3393,12 @@ def lambda3_batch_analysis(
                 config=config,
                 verbose=False
             )
-            
+
             # 結果保存
             output_file = Path(output_dir) / f"{Path(data_file).stem}_lambda3_results.pkl"
             with open(output_file, 'wb') as f:
                 pickle.dump(results, f)
-                
+
             batch_results[data_file] = results
 
         except Exception as e:
@@ -3399,14 +3464,14 @@ def lambda3_streaming_analysis(
                 for name, data in current_data.items():
                     features = calc_lambda3_features(data, config)
                     features_dict[name] = features
-                
+
                 # 危機検出
                 crisis_results = detect_structural_crisis(features_dict)
                 crisis_score = np.mean(crisis_results['aggregate_crisis'])
-                
+
                 # 結果表示
                 print(f"\n[Iteration {iteration}] Crisis Score: {crisis_score:.3f}", end="")
-                
+
                 if crisis_score > crisis_threshold:
                     print(" ⚠️  ALERT: High crisis level detected!")
                 else:
@@ -3420,52 +3485,52 @@ def lambda3_streaming_analysis(
         except Exception as e:
             print(f"Error in streaming: {e}")
             continue
-            
+
 # ===============================
 # Main Execution for Google Colab
 # ===============================
 if __name__ == '__main__':
 
     warnings.filterwarnings('ignore')
-    
+
     # Colab環境チェック
     IN_COLAB = 'google.colab' in sys.modules
-    
+
     if IN_COLAB:
         print("🔬 Lambda³ Analytics Framework - Google Colab Edition")
         print("=" * 60)
-        
+
         # Colabで必要なライブラリのインストール
         print("\n📦 Installing required packages...")
         !pip install -q pymc arviz yfinance networkx numba pandas numpy matplotlib seaborn scikit-learn
         print("✅ Package installation complete")
-        
+
     else:
         print("🔬 Lambda³ Analytics Framework")
         print("=" * 60)
-    
+
     # デモ選択
     print("\n📊 Select Demo:")
     print("1. Financial Market Analysis (USD/JPY, Oil, Gold, Indices)")
     print("2. Load Custom CSV Data")
     print("3. Generate Synthetic Data Demo")
     print("4. Quick Test (Small Dataset)")
-    
+
     if IN_COLAB:
         # Colab用のインタラクティブ入力
         demo_choice = input("\nEnter choice (1-4) [default: 1]: ").strip() or "1"
     else:
         # ローカル実行時のデフォルト
         demo_choice = "1"
-    
+
     print("\n" + "="*60)
-    
+
     try:
         if demo_choice == "1":
             # 金融市場分析デモ
             print("📈 Financial Market Analysis Demo")
             print("-" * 60)
-            
+
             # 期間設定
             if IN_COLAB:
                 start_date = input("Start date (YYYY-MM-DD) [default: 2023-01-01]: ").strip() or "2023-01-01"
@@ -3473,7 +3538,7 @@ if __name__ == '__main__':
             else:
                 start_date = "2023-01-01"
                 end_date = "2024-12-31"
-            
+
             # Lambda³分析実行
             results = lambda3_analyze_financial_data(
                 start_date=start_date,
@@ -3484,21 +3549,21 @@ if __name__ == '__main__':
                     hierarchical=True
                 )
             )
-        
+
         elif demo_choice == "2":
             # カスタムCSVロード
             print("📁 Custom CSV Data Analysis")
             print("-" * 60)
-            
+
             if IN_COLAB:
                 from google.colab import files
                 print("\n📤 Please upload your CSV file:")
                 uploaded = files.upload()
-                
+
                 if uploaded:
                     filename = list(uploaded.keys())[0]
                     print(f"\n✅ File uploaded: {filename}")
-                    
+
                     # 分析実行
                     results = run_lambda3_analysis(
                         data_source=filename,
@@ -3512,42 +3577,42 @@ if __name__ == '__main__':
                     data_source="sample_data.csv",
                     config=L3Config(hierarchical=True)
                 )
-        
+
         elif demo_choice == "3":
             # 合成データデモ
             print("🎲 Synthetic Data Demo")
             print("-" * 60)
-            
+
             # 合成データ生成
             np.random.seed(42)
             n_points = 500
-            
+
             # 構造変化を含む合成データ
             t = np.linspace(0, 10, n_points)
-            
+
             # Series A: 周期的 + ジャンプ
             series_a = np.sin(2 * np.pi * t / 3) + 0.5 * np.random.randn(n_points)
             jump_points_a = [100, 250, 400]
             for jp in jump_points_a:
                 series_a[jp:] += np.random.choice([-1, 1]) * 2
-            
+
             # Series B: Series Aに遅延相関 + 独自ノイズ
             series_b = 0.7 * np.roll(series_a, 20) + 0.3 * np.random.randn(n_points)
             jump_points_b = [150, 300]
             for jp in jump_points_b:
                 series_b[jp:] += np.random.choice([-1, 1]) * 1.5
-            
+
             # Series C: 独立系列
             series_c = np.cumsum(0.1 * np.random.randn(n_points))
-            
+
             synthetic_data = {
                 'Series_A': series_a,
                 'Series_B': series_b,
                 'Series_C': series_c
             }
-            
+
             print(f"Generated {len(synthetic_data)} synthetic series with {n_points} points each")
-            
+
             # Lambda³分析
             results = run_lambda3_analysis(
                 data_source=synthetic_data,
@@ -3557,18 +3622,18 @@ if __name__ == '__main__':
                     hierarchical=True
                 )
             )
-        
+
         elif demo_choice == "4":
             # クイックテスト
             print("⚡ Quick Test Demo")
             print("-" * 60)
-            
+
             # 小規模データ
             test_data = {
                 'Test_A': np.cumsum(np.random.randn(100)),
                 'Test_B': np.cumsum(np.random.randn(100))
             }
-            
+
             # 高速設定
             quick_config = L3Config(
                 draws=1000,
@@ -3576,29 +3641,29 @@ if __name__ == '__main__':
                 target_accept=0.85,
                 hierarchical=False
             )
-            
+
             results = run_lambda3_analysis(
                 data_source=test_data,
                 config=quick_config
             )
-            
+
             print("\n✅ Quick test completed successfully!")
-            
+
         else:
             print("❌ Invalid choice")
-            
+
     except Exception as e:
         print(f"\n❌ Error: {str(e)}")
         if IN_COLAB:
             import traceback
             traceback.print_exc()
-    
+
     finally:
         print("\n" + "="*60)
         print("🔬 Lambda³ Analysis Complete")
         print("Structural tensor dynamics revealed in semantic space")
         print("="*60)
-        
+
         if IN_COLAB:
             print("\n💡 Tip: Results are stored in the 'results' variable")
             print("📊 You can explore the data structure with: results.keys()")
