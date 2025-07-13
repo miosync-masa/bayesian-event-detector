@@ -759,25 +759,21 @@ class RegimeAwareBayesianAnalysis:
                         continue
                     
                     # Check for sub-regimes
+                    # Create combined features for sub-regime detection
+                    # Note: Features are already regime-specific, so we don't need additional masking
                     pair_features_combined = {
-                        'delta_LambdaC_pos': np.concatenate([
-                            regime_features[name_a]['delta_LambdaC_pos'],
-                            regime_features[name_b]['delta_LambdaC_pos']
-                        ]),
-                        'delta_LambdaC_neg': np.concatenate([
-                            regime_features[name_a]['delta_LambdaC_neg'],
-                            regime_features[name_b]['delta_LambdaC_neg']
-                        ]),
-                        'rho_T': np.concatenate([
-                            regime_features[name_a]['rho_T'],
-                            regime_features[name_b]['rho_T']
-                        ])
+                        'delta_LambdaC_pos': regime_features[name_a]['delta_LambdaC_pos'],
+                        'delta_LambdaC_neg': regime_features[name_a]['delta_LambdaC_neg'],
+                        'rho_T': regime_features[name_a]['rho_T']
                     }
+                    
+                    # Create sub-regime mask for already filtered data
+                    sub_regime_mask = np.full(len(regime_features[name_a]['data']), regime_idx)
                     
                     # Detect sub-regimes if enabled
                     sub_regimes = self.regime_detector.detect_pair_specific_subregimes(
                         pair_features_combined,
-                        global_regimes[regime_mask],
+                        sub_regime_mask,
                         (name_a, name_b)
                     )
                     
@@ -1456,10 +1452,25 @@ def run_lambda3_regime_aware_analysis(
     # Initialize Bayesian logger
     bayes_logger = Lambda3BayesianLogger(hdi_prob=base_config.hdi_prob)
     
-    # Extract features
+    # Extract features - IMPORTANT: Disable hierarchical mode for regime analysis
+    # to ensure consistent feature dimensions
+    # Note: Hierarchical features may have different dimensions than raw data,
+    # which causes issues with regime masking. The regime analysis will still
+    # capture hierarchical dynamics through the regime detection itself.
+    feature_config = copy.deepcopy(base_config)
+    feature_config.hierarchical = False  # Force non-hierarchical mode
+    
     features_dict = {}
     for name, data in series_dict.items():
-        features_dict[name] = calc_lambda3_features(data, base_config)
+        features_dict[name] = calc_lambda3_features(data, feature_config)
+        
+    # Verify feature dimensions match data dimensions
+    for name in series_names:
+        data_len = len(series_dict[name])
+        feat_len = len(features_dict[name]['data'])
+        if data_len != feat_len:
+            print(f"WARNING: Data/Feature length mismatch for {name}: {data_len} vs {feat_len}")
+            print("This may indicate hierarchical features are being used. Regime analysis requires non-hierarchical features.")
     
     # Run regime-aware analysis
     regime_analyzer = RegimeAwareBayesianAnalysis(
