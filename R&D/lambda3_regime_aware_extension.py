@@ -423,8 +423,10 @@ class HierarchicalRegimeDetector:
                 for name, features in features_dict.items():
                     # Average returns (approximated by data differences)
                     data = features.get('data', np.zeros(len(mask)))
-                    returns = np.diff(data, prepend=data[0]) / (data[:-1] + 1e-8)
-                    stats['avg_returns'][name] = np.mean(returns[mask[:-1]])
+                    returns = np.zeros_like(data)
+                    returns[1:] = (data[1:] - data[:-1]) / (data[:-1] + 1e-8)
+                    returns[0] = 0  # 最初のリターンは0
+                    stats['avg_returns'][name] = np.mean(returns[mask])
                     
                     # Average volatility (tension)
                     stats['avg_volatility'][name] = np.mean(features['rho_T'][mask])
