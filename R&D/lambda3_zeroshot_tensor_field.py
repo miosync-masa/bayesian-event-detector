@@ -208,9 +208,10 @@ def load_csv_data(filepath: str, time_column: Optional[str] = None,
 @njit
 def calculate_diff_and_threshold(data: np.ndarray, percentile: float) -> Tuple[np.ndarray, float]:
     """JIT-compiled difference calculation and threshold computation."""
-    diff = np.empty(len(data))
+    n = data.shape[0]  # Numba-compatible
+    diff = np.empty(n)
     diff[0] = 0
-    for i in range(1, len(data)):
+    for i in range(1, n):
         diff[i] = data[i] - data[i-1]
 
     abs_diff = np.abs(diff)
@@ -242,7 +243,7 @@ def calculate_local_std(data: np.ndarray, window: int) -> np.ndarray:
         start = max(0, i - window)
         end = min(n, i + window + 1)
 
-                subset = data[start:end]
+        subset = data[start:end]
         subset_len = end - start  # Avoid len() call
         if subset_len > 0:
             mean = np.mean(subset)
@@ -263,7 +264,7 @@ def calculate_rho_t(data: np.ndarray, window: int) -> np.ndarray:
         start = max(0, i - window)
         end = i + 1
 
-                subset = data[start:end]
+        subset = data[start:end]
         subset_len = end - start  # Avoid len() call
         if subset_len > 1:
             mean = np.mean(subset)
@@ -277,13 +278,16 @@ def calculate_rho_t(data: np.ndarray, window: int) -> np.ndarray:
 @njit
 def sync_rate_at_lag(series_a: np.ndarray, series_b: np.ndarray, lag: int) -> float:
     """JIT-compiled synchronization rate calculation for a specific lag."""
+    len_a = series_a.shape[0]  # Numba-compatible
+    len_b = series_b.shape[0]  # Numba-compatible
+    
     if lag < 0:
-        if -lag < series_a.shape[0]:
+        if -lag < len_a:
             return np.mean(series_a[-lag:] * series_b[:lag])
         else:
             return 0.0
     elif lag > 0:
-        if lag < series_b.shape[0]:
+        if lag < len_b:
             return np.mean(series_a[:-lag] * series_b[lag:])
         else:
             return 0.0
@@ -340,6 +344,7 @@ def detect_local_global_jumps(
         local_end = min(n, i + local_window + 1)
         local_subset = np.abs(diff[local_start:local_end])
 
+        subset_len = local_end - local_start  # Avoid len() call
         if subset_len > 0:
             local_threshold = np.percentile(local_subset, local_percentile)
             if diff[i] > local_threshold:
