@@ -30,7 +30,7 @@ from dask import delayed, compute  # Parallel computing
 from joblib import Parallel, delayed as joblib_delayed
 
 # Import existing Lambda³ modules
-from test import (
+from lambda3_zeroshot_tensor_field import (
     L3Config, calc_lambda3_features, fit_l3_pairwise_bayesian_system,
     Lambda3BayesianLogger, Lambda3FinancialRegimeDetector,
     detect_basic_structural_causality, sync_matrix,
