@@ -1,8 +1,8 @@
-# 🧬 bayesian-event-detector Series: Code Evolution
-
 <p align="center">
   <img src="https://www.miosync.link/github/0_2.jpg" alt="Lambda³" width="100"/>
 </p>
+
+# 🧬 bayesian-event-detector Series: Code Evolution
 
 This repository showcases the evolution of Lambda³ (Λ³)–based event-driven time series analysis, from a minimal single-series jump detector to a full tensor-based structural network extractor.
 
