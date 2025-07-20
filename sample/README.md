@@ -1,6 +1,6 @@
 # 🌏 Lambda³ × Open-Meteo — Towards a Unified Earth System Analysis
 
- [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/miosync-masa/bayesian-event-detector/blob/main/sample/lambda3_weather_analysis.ipynb)
+NY: https://colab.research.google.com/drive/1Crygnt8hQsGlPO0dc2uTtVQVe4tCFERW?usp=sharing
 
 ## 🌤️ Best Practices for Meteorological Lambda³ Analysis
 ## 🌏 Lambda³ Parameter Cheat Sheet
