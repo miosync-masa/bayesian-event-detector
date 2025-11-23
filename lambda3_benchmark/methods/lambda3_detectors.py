@@ -27,15 +27,7 @@ for path in [_root_path, _rd_path]:
     if path not in sys.path:
         sys.path.insert(0, path)
 
-# Lambda3 core functions from project file
-from lambda3_abc import (
-    calc_lambda3_features_v2,
-    fit_l3_bayesian_regression_asymmetric,
-    calculate_sync_profile,
-    L3Config
-)
-
-# Advanced functions from project file (R&D/ にある)
+# Advanced functions from project file (R&D/ にある) - 先にインポート
 try:
     from lambda3_zeroshot_tensor_field import (
         calc_lambda3_features,  # 階層的特徴抽出
@@ -47,9 +39,30 @@ try:
         calculate_structural_hierarchy_metrics  # 階層メトリクス
     )
     ADVANCED_AVAILABLE = True
+    
+    # L3Config も lambda3_zeroshot_tensor_field から取得（hierarchical対応版）
+    try:
+        from lambda3_zeroshot_tensor_field import L3Config as L3ConfigHierarchical
+        L3Config = L3ConfigHierarchical  # 拡張版を使う
+        print("✅ Using hierarchical L3Config from lambda3_zeroshot_tensor_field")
+    except ImportError:
+        # フォールバック：lambda3_abc から取得
+        from lambda3_abc import L3Config
+        print("⚠️  Using basic L3Config from lambda3_abc (hierarchical parameter not supported)")
+        
 except ImportError:
     ADVANCED_AVAILABLE = False
     print("Warning: Advanced Lambda3 functions not available. Using basic mode.")
+    # 基本版にフォールバック
+    from lambda3_abc import L3Config
+
+# Lambda3 core functions from project file (基本機能は lambda3_abc から)
+from lambda3_abc import (
+    calc_lambda3_features_v2,
+    fit_l3_bayesian_regression_asymmetric,
+    calculate_sync_profile
+)
+# L3Config は上で既にインポート済み
 
 import arviz as az
 
@@ -370,7 +383,7 @@ class Lambda3DetectorHierarchical:
         self.config = config or L3Config(
             draws=8000,
             tune=8000,
-            hierarchical=True
+            hierarchical=True  # hierarchical 対応版 L3Config なら使える
         )
         
         # 階層的設定
@@ -433,15 +446,6 @@ class Lambda3DetectorHierarchical:
         if self.verbose:
             print(f"\n[Stage 1] Hierarchical Feature Extraction")
         
-        hierarchical_config = L3Config(
-            window=self.config.window,
-            local_window=self.local_window,
-            global_window=self.global_window,
-            hierarchical=True,
-            local_threshold_percentile=self.local_percentile,
-            global_threshold_percentile=self.global_percentile
-        )
-        
         features_dict = {}
         hierarchy_metrics_all = {}
         
@@ -449,8 +453,9 @@ class Lambda3DetectorHierarchical:
             if self.verbose:
                 print(f"  {name}: ", end="")
             
-            # 階層的特徴抽出
-            features = calc_lambda3_features(data[:, i], hierarchical_config)
+            # 階層的特徴抽出（デフォルト設定）
+            # calc_lambda3_features は内部でデフォルトの階層的設定を使う
+            features = calc_lambda3_features(data[:, i], self.config)
             features_dict[name] = features
             
             # 階層メトリクス
