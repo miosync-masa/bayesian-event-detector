@@ -188,4 +188,49 @@ def calculate_metrics_unidirectional(results: list, ground_truths: list) -> dict
         'mean_asymmetry_error': np.mean(asymmetry_errors),
         'std_asymmetry_error': np.std(asymmetry_errors)
     }
-  
+
+def calculate_metrics_bidirectional(results: list, ground_truths: list) -> dict:
+    """両方向検出の評価指標"""
+    n = len(results)
+    
+    correct_count = sum(
+        is_correct_delayed_bidirectional(r, gt) 
+        for r, gt in zip(results, ground_truths)
+    )
+    
+    lag_errors = [
+        abs(r['primary_lag'] - gt['true_lag']) 
+        for r, gt in zip(results, ground_truths)
+    ]
+    
+    beta_errors = [
+        abs(r['primary_beta'] - gt['true_beta']) 
+        for r, gt in zip(results, ground_truths)
+    ]
+    
+    asymmetry_ratios = [r['asymmetry_ratio'] for r in results]
+    
+    return {
+        'accuracy': correct_count / n,
+        'correct_count': correct_count,
+        'total': n,
+        'mean_lag_error': np.mean(lag_errors),
+        'std_lag_error': np.std(lag_errors),
+        'mean_beta_error': np.mean(beta_errors),
+        'std_beta_error': np.std(beta_errors),
+        'mean_asymmetry': np.mean(asymmetry_ratios),
+        'std_asymmetry': np.std(asymmetry_ratios)
+    }
+
+
+def is_correct_delayed_bidirectional(detected: dict, ground_truth: dict, 
+                                     lag_tolerance: int = 2, 
+                                     beta_threshold: float = 0.5,
+                                     asymmetry_threshold: float = 2.0) -> bool:
+    """両方向検出の正解判定"""
+    primary_correct = (
+        abs(detected['primary_lag'] - ground_truth['true_lag']) <= lag_tolerance
+        and detected['primary_beta'] > beta_threshold
+    )
+    asymmetry_detected = detected['asymmetry_ratio'] > asymmetry_threshold
+    return primary_correct and asymmetry_detected
