@@ -254,7 +254,7 @@ class Lambda3DetectorBidirectional:
     - 非対称性の評価
     """
     def __init__(self, config: L3Config = None, verbose: bool = False):
-        self.config = config or L3Config(draws=4000, tune=4000)
+        self.config = config or L3Config(draws=3000, tune=3000)
         self.name = "Lambda3_Bidirectional"
         self.verbose = verbose
     
@@ -686,31 +686,57 @@ class Lambda3DetectorHierarchical:
             # NEW: 生データでβ再推定
             if N >= 2 and causality_results is not None:
                 # causality_results から最適lagを取得
-                optimal_lag = causality_results.get('optimal_lag', 0)
-                
-                if primary_direction == 'forward':
-                    beta_refined = _estimate_beta_on_raw_data(
-                        data[:, 0], 
-                        data[:, 1], 
-                        optimal_lag
-                    )
+                # まず strongest_causality から試す
+                if 'strongest_causality' in causality_results:
+                    optimal_lag = causality_results['strongest_causality'].get('optimal_lag', 5)
+                elif 'optimal_lag' in causality_results:
+                    optimal_lag = causality_results['optimal_lag']
                 else:
-                    beta_refined = _estimate_beta_on_raw_data(
-                        data[:, 1], 
-                        data[:, 0], 
-                        optimal_lag
-                    )
-                
-                beta_main = beta_refined
-                lag_main = optimal_lag
-                
-                # pairwise_results に追加
-                pairwise_results['beta_refined'] = beta_refined
-                pairwise_results['beta_lambda'] = beta_lambda
+                    # デフォルトは5（設定値）
+                    optimal_lag = 5
                 
                 if self.verbose:
-                    print(f"  β (Lambda): {beta_lambda:.3f}")
-                    print(f"  β (Refined): {beta_refined:.3f}")
+                    print(f"  Using optimal_lag: {optimal_lag} for β refinement")
+                
+                # 両方向でβ再推定
+                beta_refined_AB = _estimate_beta_on_raw_data(
+                    data[:, 0], 
+                    data[:, 1], 
+                    optimal_lag
+                )
+                beta_refined_BA = _estimate_beta_on_raw_data(
+                    data[:, 1], 
+                    data[:, 0], 
+                    optimal_lag
+                )
+                
+                # pairwise_results の forward/backward に追加
+                pairwise_results['forward']['beta_refined'] = beta_refined_AB
+                pairwise_results['forward']['beta_lambda'] = pairwise_results['forward']['beta']
+                
+                pairwise_results['backward']['beta_refined'] = beta_refined_BA
+                pairwise_results['backward']['beta_lambda'] = pairwise_results['backward']['beta']
+                
+                # 主方向に応じてメインを設定
+                if primary_direction == 'forward':
+                    beta_main = beta_refined_AB
+                    beta_lambda_main = pairwise_results['forward']['beta']
+                else:
+                    beta_main = beta_refined_BA
+                    beta_lambda_main = pairwise_results['backward']['beta']
+                
+                lag_main = optimal_lag
+                
+                # 非対称性も refined 版で再計算
+                asymmetry_refined = beta_refined_AB / (beta_refined_BA + 0.01)
+                pairwise_results['asymmetry_ratio_refined'] = asymmetry_refined
+                pairwise_results['asymmetry_ratio_lambda'] = pairwise_results['asymmetry_ratio']
+                pairwise_results['asymmetry_ratio'] = asymmetry_refined  # メインを更新
+                
+                if self.verbose:
+                    print(f"  β (Lambda): {beta_lambda_main:.3f}")
+                    print(f"  β (Refined): {beta_main:.3f}")
+                    print(f"  Asymmetry (Refined): {asymmetry_refined:.2f}x")
             else:
                 beta_main = beta_lambda
             
