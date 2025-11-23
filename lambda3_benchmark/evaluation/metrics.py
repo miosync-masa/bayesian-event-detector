@@ -52,6 +52,85 @@ def calculate_metrics(results: list, ground_truths: list) -> dict:
         'std_beta_error': np.std(beta_errors)
     }
 
+
+def is_correct_hidden(detected: dict, ground_truth: dict,
+                     beta_threshold: float = 1.5,
+                     sync_threshold: float = 0.2) -> bool:
+    """
+    隠れドミノの正解判定
+    
+    正解条件:
+    1. 結合強度が強い（|β| > 1.5）
+    2. 同期率が低い（σ_s < 0.2）← これが重要！
+    
+    物理的意味:
+    - 「見た目は無関係（同期してない）」
+    - 「でも実は強く結びついてる」
+    
+    Args:
+        detected: 検出結果
+        ground_truth: 真の構造
+        beta_threshold: Beta検出閾値
+        sync_threshold: 同期率の上限（これ以下であるべき）
+    
+    Returns:
+        正解ならTrue
+    """
+    # Lambda3の場合
+    if 'forward' in detected:
+        # 両方向検出版
+        beta_detected = detected['primary_beta']
+        sync_rate = detected['forward'].get('sync_rate', 1.0)
+    else:
+        # 単方向検出版
+        beta_detected = detected['beta']
+        sync_rate = detected.get('sync_rate', 1.0)
+    
+    # 条件1: 結合強度が強い
+    strong_coupling = abs(beta_detected) > beta_threshold
+    
+    # 条件2: 同期率が低い（これが「隠れ」の証拠）
+    low_sync = sync_rate < sync_threshold
+    
+    return strong_coupling and low_sync
+
+
+def calculate_metrics_hidden(results: list, ground_truths: list) -> dict:
+    """Type C（隠れドミノ）専用評価指標"""
+    n = len(results)
+    
+    correct_count = sum(
+        is_correct_hidden(r, gt) 
+        for r, gt in zip(results, ground_truths)
+    )
+    
+    # Beta誤差
+    beta_errors = []
+    for r, gt in zip(results, ground_truths):
+        if 'primary_beta' in r:
+            beta_detected = r['primary_beta']
+        else:
+            beta_detected = r['beta']
+        beta_errors.append(abs(beta_detected - gt['true_beta']))
+    
+    # 同期率の統計
+    sync_rates = []
+    for r in results:
+        if 'forward' in r:
+            sync_rates.append(r['forward'].get('sync_rate', 1.0))
+        else:
+            sync_rates.append(r.get('sync_rate', 1.0))
+    
+    return {
+        'accuracy': correct_count / n,
+        'correct_count': correct_count,
+        'total': n,
+        'mean_beta_error': np.mean(beta_errors),
+        'std_beta_error': np.std(beta_errors),
+        'mean_sync_rate': np.mean(sync_rates),
+        'std_sync_rate': np.std(sync_rates)
+    }
+  
 # =======================================
 # Type B 専用評価指標
 # =======================================
@@ -110,4 +189,3 @@ def calculate_metrics_unidirectional(results: list, ground_truths: list) -> dict
         'std_asymmetry_error': np.std(asymmetry_errors)
     }
   
-print("✅ Type B 評価指標 完成！")
