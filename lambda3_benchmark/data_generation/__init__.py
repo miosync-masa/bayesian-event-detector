@@ -9,3 +9,9 @@ from .unidirectional import (
     generate_unidirectional_domino,
     generate_unidirectional_batch
 )
+
+from .hidden_domino import (
+    HiddenDominoConfig,
+    generate_hidden_domino,
+    generate_hidden_batch
+)
