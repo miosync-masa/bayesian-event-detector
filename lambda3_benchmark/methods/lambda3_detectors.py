@@ -16,12 +16,16 @@ import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any
 import time
 
-# パス設定（lambda3_abc は2階層上のルートディレクトリにある）
+# パス設定（lambda3_abc は2階層上のルート、lambda3_zeroshot_tensor_field は R&D/ にある）
 import sys
 import os
 _root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-if _root_path not in sys.path:
-    sys.path.insert(0, _root_path)
+_rd_path = os.path.join(_root_path, 'R&D')
+
+# 両方のパスを追加
+for path in [_root_path, _rd_path]:
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 # Lambda3 core functions from project file
 from lambda3_abc import (
@@ -31,7 +35,7 @@ from lambda3_abc import (
     L3Config
 )
 
-# Advanced functions from project file
+# Advanced functions from project file (R&D/ にある)
 try:
     from lambda3_zeroshot_tensor_field import (
         calc_lambda3_features,  # 階層的特徴抽出
