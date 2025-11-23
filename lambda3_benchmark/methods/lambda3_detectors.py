@@ -16,6 +16,13 @@ import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any
 import time
 
+# パス設定（lambda3_abc は2階層上のルートディレクトリにある）
+import sys
+import os
+_root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+if _root_path not in sys.path:
+    sys.path.insert(0, _root_path)
+
 # Lambda3 core functions from project file
 from lambda3_abc import (
     calc_lambda3_features_v2,
