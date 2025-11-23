@@ -1,2 +1,4 @@
 from .lambda3_detector import Lambda3Detector, Lambda3DetectorBidirectional
 from .var_detector import VARDetector
+from .transfer_entropy_detector import TransferEntropyDetector
+from .graphical_lasso_detector import GraphicalLassoDetector
