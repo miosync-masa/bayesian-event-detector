@@ -60,7 +60,7 @@ class Lambda3Detector:
         beta_stress = summary.loc['beta_interact_stress', 'mean']
         
         # 総合結合強度
-        beta_total = beta_pos + abs(beta_neg) + abs(beta_stress)
+        beta_total = abs(beta_pos) + abs(beta_neg) + abs(beta_stress)
         
         # 同期率とラグ検出
         sync_profile, max_sync, optimal_lag = calculate_sync_profile(
