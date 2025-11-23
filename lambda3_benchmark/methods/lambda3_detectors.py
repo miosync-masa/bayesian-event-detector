@@ -68,6 +68,56 @@ import arviz as az
 
 
 # ===============================
+# 共通ユーティリティ
+# ===============================
+def _estimate_beta_on_raw_data(data_A: np.ndarray, 
+                                data_B: np.ndarray, 
+                                lag: int) -> float:
+    """
+    lagが判明した後、生データで線形回帰してβを推定
+    
+    Parameters:
+    -----------
+    data_A : np.ndarray
+        原因系列（生データ）
+    data_B : np.ndarray
+        結果系列（生データ）
+    lag : int
+        遅延（Lambda3で検出済み）
+    
+    Returns:
+    --------
+    beta_refined : float
+        生データ空間での真の係数
+    
+    Example:
+    --------
+    # B(t) = β * A(t-lag) + noise の β を推定
+    beta_true = _estimate_beta_on_raw_data(data_A, data_B, lag=5)
+    """
+    from sklearn.linear_model import LinearRegression
+    
+    # lag分ずらして線形回帰
+    if lag > 0:
+        X = data_A[:-lag].reshape(-1, 1)
+        Y = data_B[lag:]
+    elif lag < 0:
+        # 負のlag（B→A の場合）
+        X = data_A[-lag:].reshape(-1, 1)
+        Y = data_B[:lag]
+    else:
+        # lag=0（同時）
+        X = data_A.reshape(-1, 1)
+        Y = data_B
+    
+    # 線形回帰
+    model = LinearRegression()
+    model.fit(X, Y)
+    
+    return model.coef_[0]
+
+
+# ===============================
 # 基本検出器（後方互換性）
 # ===============================
 class Lambda3Detector:
@@ -159,13 +209,24 @@ class Lambda3Detector:
         
         computation_time = time.time() - start_time
         
+        # NEW: 生データでβ再推定
+        beta_refined = _estimate_beta_on_raw_data(
+            data[:, 0], 
+            data[:, 1], 
+            optimal_lag
+        )
+        
         if self.verbose:
             print(f"  Detection complete: β={beta_total:.3f}, lag={optimal_lag}")
+            print(f"  β (Lambda): {beta_total:.3f}")
+            print(f"  β (Refined): {beta_refined:.3f}")
             print(f"  Computation time: {computation_time:.2f}s")
         
         return {
             'detected_edges': [(0, 1, optimal_lag, beta_total)],
-            'beta': beta_total,
+            'beta': beta_refined,  # メインは refined を使う
+            'beta_lambda': beta_total,  # Λ空間の係数
+            'beta_refined': beta_refined,  # 生データの係数
             'beta_pos': beta_pos,
             'beta_neg': beta_neg,
             'beta_stress': beta_stress,
@@ -303,34 +364,63 @@ class Lambda3DetectorBidirectional:
         if self.verbose:
             print(f"  B→A: β={result_BA['beta']:.3f}, lag={result_BA['lag']}")
         
-        # 非対称性
-        asymmetry_ratio = result_AB['beta'] / (result_BA['beta'] + 0.01)
+        computation_time = time.time() - start_time
         
-        # 主方向
-        if result_AB['beta'] > result_BA['beta']:
+        # NEW: 生データでβ再推定（両方向）
+        beta_refined_AB = _estimate_beta_on_raw_data(
+            data[:, 0], 
+            data[:, 1], 
+            result_AB['lag']
+        )
+        beta_refined_BA = _estimate_beta_on_raw_data(
+            data[:, 1], 
+            data[:, 0], 
+            result_BA['lag']
+        )
+        
+        # 結果に追加
+        result_AB['beta_refined'] = beta_refined_AB
+        result_AB['beta_lambda'] = result_AB['beta']
+        
+        result_BA['beta_refined'] = beta_refined_BA
+        result_BA['beta_lambda'] = result_BA['beta']
+        
+        # 非対称性（refined版）
+        asymmetry_ratio_refined = beta_refined_AB / (beta_refined_BA + 0.01)
+        
+        # 主方向（refined版で判定）
+        if beta_refined_AB > beta_refined_BA:
             primary_direction = 'A→B'
-            primary_beta = result_AB['beta']
+            primary_beta = beta_refined_AB
+            primary_beta_lambda = result_AB['beta']
             primary_lag = result_AB['lag']
         else:
             primary_direction = 'B→A'
-            primary_beta = result_BA['beta']
+            primary_beta = beta_refined_BA
+            primary_beta_lambda = result_BA['beta']
             primary_lag = result_BA['lag']
         
         computation_time = time.time() - start_time
         
         if self.verbose:
             print(f"  Primary direction: {primary_direction}")
-            print(f"  Asymmetry ratio: {asymmetry_ratio:.2f}")
+            print(f"  β (Lambda): {primary_beta_lambda:.3f}")
+            print(f"  β (Refined): {primary_beta:.3f}")
+            print(f"  Asymmetry (Lambda): {asymmetry_ratio:.2f}")
+            print(f"  Asymmetry (Refined): {asymmetry_ratio_refined:.2f}")
             print(f"  Computation time: {computation_time:.2f}s")
         
         return {
             'forward': result_AB,
             'backward': result_BA,
-            'asymmetry_ratio': asymmetry_ratio,
+            'asymmetry_ratio': asymmetry_ratio_refined,  # refined版を使う
+            'asymmetry_ratio_lambda': asymmetry_ratio,
             'primary_direction': primary_direction,
-            'primary_beta': primary_beta,
+            'primary_beta': primary_beta,  # refined版
+            'primary_beta_lambda': primary_beta_lambda,
             'primary_lag': primary_lag,
-            'beta': primary_beta,
+            'beta': primary_beta,  # メインはrefined
+            'beta_lambda': primary_beta_lambda,
             'lag': primary_lag,
             'detected_edges': [(0, 1, primary_lag, primary_beta)],
             'computation_time': computation_time
@@ -572,26 +662,63 @@ class Lambda3DetectorHierarchical:
             causality_results = None
         
         # ===========================
-        # Stage 4: 結果統合
+        # Stage 4: 結果統合 + β再推定
         # ===========================
         computation_time = time.time() - start_time
         
         # エッジ検出
         detected_edges = []
+        beta_main = 0.0
+        beta_lambda = 0.0
+        lag_main = 0
+        
         if pairwise_results is not None:
-            # 主方向のエッジ
+            # 主方向のエッジ（Lambda空間）
             if pairwise_results['forward']['beta'] > pairwise_results['backward']['beta']:
-                detected_edges.append((
-                    0, 1,
-                    0,  # lag（ペアワイズではlag係数で表現）
-                    pairwise_results['forward']['beta']
-                ))
+                primary_direction = 'forward'
+                beta_lambda = pairwise_results['forward']['beta']
+                lag_main = 0  # ペアワイズではlag係数で表現
             else:
-                detected_edges.append((
-                    1, 0,
-                    0,
-                    pairwise_results['backward']['beta']
-                ))
+                primary_direction = 'backward'
+                beta_lambda = pairwise_results['backward']['beta']
+                lag_main = 0
+            
+            # NEW: 生データでβ再推定
+            if N >= 2 and causality_results is not None:
+                # causality_results から最適lagを取得
+                optimal_lag = causality_results.get('optimal_lag', 0)
+                
+                if primary_direction == 'forward':
+                    beta_refined = _estimate_beta_on_raw_data(
+                        data[:, 0], 
+                        data[:, 1], 
+                        optimal_lag
+                    )
+                else:
+                    beta_refined = _estimate_beta_on_raw_data(
+                        data[:, 1], 
+                        data[:, 0], 
+                        optimal_lag
+                    )
+                
+                beta_main = beta_refined
+                lag_main = optimal_lag
+                
+                # pairwise_results に追加
+                pairwise_results['beta_refined'] = beta_refined
+                pairwise_results['beta_lambda'] = beta_lambda
+                
+                if self.verbose:
+                    print(f"  β (Lambda): {beta_lambda:.3f}")
+                    print(f"  β (Refined): {beta_refined:.3f}")
+            else:
+                beta_main = beta_lambda
+            
+            # エッジを追加
+            if primary_direction == 'forward':
+                detected_edges.append((0, 1, lag_main, beta_main))
+            else:
+                detected_edges.append((1, 0, lag_main, beta_main))
         
         # HDI サマリー
         hdi_summary_df = self.bayes_logger.generate_summary_report()
@@ -614,8 +741,9 @@ class Lambda3DetectorHierarchical:
             'causality_results': causality_results,
             'hdi_summary': hdi_summary_df,
             'detected_edges': detected_edges,
-            'beta': detected_edges[0][3] if detected_edges else 0.0,
-            'lag': detected_edges[0][2] if detected_edges else 0,
+            'beta': beta_main,  # メインはrefined
+            'beta_lambda': beta_lambda,
+            'lag': lag_main,
             'computation_time': computation_time,
             'bayes_logger': self.bayes_logger
         }
