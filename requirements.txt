@@ -26,6 +26,8 @@ numba>=0.56.0
 # Financial data access
 yfinance>=0.2.0
 
+statsmodels>=0.13
+
 # Standard library datastructures (already included in Python 3.7+)
 # dataclasses - built-in for Python 3.7+
 # typing - built-in for Python 3.5+
