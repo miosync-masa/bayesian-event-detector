@@ -5,9 +5,7 @@ Lambda3 Structural Benchmark Suite
 ==================================
 
 A benchmark harness for *structural coupling analysis* rather than forecasting.
-
 This version is intentionally designed to run from a *single file*.
-You do NOT need a separate `lambda3_adapter_example.py`.
 
 How to use Lambda3 in this file
 -------------------------------
@@ -38,22 +36,19 @@ Design goals
 
 from __future__ import annotations
 
+import os
+os.environ["NUMBA_NUM_THREADS"] = "2"
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+
 import math
 import re
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-# Lambda3 benchmark package
-from lambda3_benchmark.data_generation.delayed_domino import (
-    DelayedDominoConfig,
-    generate_dataset_batch
-)
-from lambda3_benchmark.methods import (
-    Lambda3Detector,
-    Lambda3DetectorBidirectional,
-    VARDetector
-)
+
+from lambda3_benchmark.methods.lambda3_detectors import create_lambda3_detector
 
 import numpy as np
 import pandas as pd
@@ -79,57 +74,81 @@ try:
 except Exception:
     _HAS_STATSMODELS = False
 
+try:
+    from pyinform.transferentropy import transfer_entropy as _pyinform_transfer_entropy
+    _HAS_PYINFORM = True
+except Exception:
+    _pyinform_transfer_entropy = None
+    _HAS_PYINFORM = False
+
+try:
+    from tigramite import data_processing as pp
+    from tigramite.pcmci import PCMCI
+    from tigramite.independence_tests.parcorr import ParCorr
+    _HAS_TIGRAMITE = True
+except Exception:
+    pp = None
+    PCMCI = None
+    ParCorr = None
+    _HAS_TIGRAMITE = False
+
+
 # ---------------------------------------------------------------------
 # Optional Lambda3 symbol resolver
 # ---------------------------------------------------------------------
 
-def _try_import_lambda3_symbols():
+def _try_import_lambda3_symbols() -> Dict[str, Any]:
     """
-    Resolve Lambda3 symbols from the user's project.
+    Resolve Lambda3 symbols.
+
+    Priority:
+    1. Already present in globals() (e.g. notebook session)
+    2. Optional module imports (edit this list to match your environment)
+
+    Returns
+    -------
+    dict containing any resolved symbols.
     """
-    import sys
-    import os
+    needed = [
+        "L3Config",
+        "calc_lambda3_features_v2",
+        "fit_l3_bayesian_regression_asymmetric",
+        "calculate_sync_profile",
+    ]
 
-    # プロジェクトルートを追加
-    project_root = "/content/bayesian-event-detector"
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
+    resolved: Dict[str, Any] = {}
 
-    # まず lambda3_detectors から拾う
-    try:
-        from lambda3_benchmark.methods.lambda3_detectors import (
-            L3Config,
-            calc_lambda3_features_v2,
-            fit_l3_bayesian_regression_asymmetric,
-            calculate_sync_profile,
-        )
-        return {
-            "L3Config": L3Config,
-            "calc_lambda3_features_v2": calc_lambda3_features_v2,
-            "fit_l3_bayesian_regression_asymmetric": fit_l3_bayesian_regression_asymmetric,
-            "calculate_sync_profile": calculate_sync_profile,
-        }
-    except Exception as e:
-        print(f"[Lambda3 import] failed from lambda3_detectors: {e}")
+    # 1) from current globals
+    g = globals()
+    for name in needed:
+        if name in g:
+            resolved[name] = g[name]
 
-    # 直接 lambda3_abc からも試す
-    try:
-        from lambda3_abc import (
-            L3Config,
-            calc_lambda3_features_v2,
-            fit_l3_bayesian_regression_asymmetric,
-            calculate_sync_profile,
-        )
-        return {
-            "L3Config": L3Config,
-            "calc_lambda3_features_v2": calc_lambda3_features_v2,
-            "fit_l3_bayesian_regression_asymmetric": fit_l3_bayesian_regression_asymmetric,
-            "calculate_sync_profile": calculate_sync_profile,
-        }
-    except Exception as e:
-        print(f"[Lambda3 import] failed from lambda3_abc: {e}")
+    if len(resolved) == len(needed):
+        return resolved
 
-    return None
+    # 2) optional module imports
+    candidate_modules = [
+        "lambda3_core",
+        "lambda3_main",
+        "lambda3",
+        "lambda3_analytics",
+        "lambda3_financial",
+    ]
+
+    for module_name in candidate_modules:
+        try:
+            mod = __import__(module_name, fromlist=needed)
+            for name in needed:
+                if name not in resolved and hasattr(mod, name):
+                    resolved[name] = getattr(mod, name)
+        except Exception:
+            pass
+
+        if len(resolved) == len(needed):
+            break
+
+    return resolved
 
 
 def _require_lambda3_symbols() -> Dict[str, Any]:
@@ -325,6 +344,30 @@ def _te_discrete(source: np.ndarray, target: np.ndarray, lag: int = 1, n_bins: i
         if p_yt_given_xyp > 0 and p_yt_given_yp > 0:
             te += p_xyz * math.log(p_yt_given_xyp / p_yt_given_yp)
     return float(te)
+
+
+def _te_pyinform(source: np.ndarray, target: np.ndarray, lag: int = 1, n_bins: int = 4, k: int = 1) -> float:
+    """
+    Transfer entropy via PyInform on lag-aligned, discretized series.
+    Positive lag means target lags source.
+    """
+    if lag < 1:
+        raise ValueError("lag must be >= 1")
+    if not _HAS_PYINFORM:
+        raise RuntimeError("pyinform is not installed")
+
+    xs, ys = _shifted_overlap(np.asarray(source), np.asarray(target), lag)
+    xs = _quantile_discretize(xs, n_bins=n_bins).astype(int).tolist()
+    ys = _quantile_discretize(ys, n_bins=n_bins).astype(int).tolist()
+    if len(xs) <= max(k + 2, 8) or len(ys) <= max(k + 2, 8):
+        return 0.0
+    try:
+        te = _pyinform_transfer_entropy(xs, ys, k=k)
+        if np.isnan(te) or np.isinf(te):
+            return 0.0
+        return float(te)
+    except Exception:
+        return 0.0
 
 
 def _event_sync_score(a_events: np.ndarray, b_events: np.ndarray, lag: int) -> float:
@@ -752,11 +795,32 @@ class VARGrangerAdapter(BaseAdapter):
 class TransferEntropyAdapter(BaseAdapter):
     method_name = "TransferEntropy"
 
-    def __init__(self, max_lag: int = 8, alpha: float = 0.05, n_bins: int = 4, n_perm: int = 30):
+    def __init__(
+        self,
+        max_lag: int = 8,
+        alpha: float = 0.05,
+        n_bins: int = 4,
+        n_perm: int = 30,
+        backend: str = "pyinform",
+        k_history: int = 1,
+    ):
         self.max_lag = max_lag
         self.alpha = alpha
         self.n_bins = n_bins
         self.n_perm = n_perm
+        self.backend = backend
+        self.k_history = k_history
+
+    def _score(self, source: np.ndarray, target: np.ndarray, lag: int) -> float:
+        if self.backend == "pyinform":
+            if _HAS_PYINFORM:
+                return _te_pyinform(source, target, lag=lag, n_bins=self.n_bins, k=self.k_history)
+            warnings.warn("pyinform not installed; falling back to internal discrete TE estimator.")
+            return _te_discrete(source, target, lag=lag, n_bins=self.n_bins)
+        elif self.backend == "discrete":
+            return _te_discrete(source, target, lag=lag, n_bins=self.n_bins)
+        else:
+            raise ValueError(f"Unknown TE backend: {self.backend}")
 
     def fit(self, df: pd.DataFrame, cfg: ScenarioConfig) -> MethodOutput:
         names = list(df.columns)
@@ -777,7 +841,7 @@ class TransferEntropyAdapter(BaseAdapter):
                 best_te = -np.inf
                 best_lag = 1
                 for lag in range(1, min(self.max_lag, len(df) - 2) + 1):
-                    te = _te_discrete(x[:, i], x[:, j], lag=lag, n_bins=self.n_bins)
+                    te = self._score(x[:, i], x[:, j], lag=lag)
                     if te > best_te:
                         best_te = te
                         best_lag = lag
@@ -785,7 +849,7 @@ class TransferEntropyAdapter(BaseAdapter):
                 null_scores = []
                 for _ in range(self.n_perm):
                     perm_src = rng.permutation(x[:, i])
-                    null_scores.append(_te_discrete(perm_src, x[:, j], lag=best_lag, n_bins=self.n_bins))
+                    null_scores.append(self._score(perm_src, x[:, j], lag=best_lag))
                 null_scores = np.asarray(null_scores)
                 pval = (1 + np.sum(null_scores >= best_te)) / (self.n_perm + 1)
 
@@ -809,7 +873,103 @@ class TransferEntropyAdapter(BaseAdapter):
             regime_support=False,
             lag_matrix=lagm,
             sign_matrix=None,
-            meta={"pvalues": pvals, "n_bins": self.n_bins, "n_perm": self.n_perm},
+            meta={
+                "pvalues": pvals,
+                "n_bins": self.n_bins,
+                "n_perm": self.n_perm,
+                "backend": self.backend,
+                "k_history": self.k_history,
+                "pyinform_available": _HAS_PYINFORM,
+            },
+        )
+
+
+class PCMCIPlusAdapter(BaseAdapter):
+    method_name = "PCMCIPlus"
+
+    def __init__(self, tau_max: int = 8, pc_alpha: float = 0.05, verbosity: int = 0):
+        self.tau_max = tau_max
+        self.pc_alpha = pc_alpha
+        self.verbosity = verbosity
+
+    def fit(self, df: pd.DataFrame, cfg: ScenarioConfig) -> MethodOutput:
+        if not _HAS_TIGRAMITE:
+            raise RuntimeError(
+                "tigramite is not installed. Install it with `pip install tigramite`."
+            )
+
+        names = list(df.columns)
+        x = df.to_numpy(dtype=float)
+        n = len(names)
+
+        tg_df = pp.DataFrame(x, var_names=names)
+        pcmci = PCMCI(dataframe=tg_df, cond_ind_test=ParCorr(significance='analytic'), verbosity=self.verbosity)
+        results = pcmci.run_pcmciplus(tau_min=0, tau_max=self.tau_max, pc_alpha=self.pc_alpha)
+
+        graph = results.get("graph")
+        val_matrix = results.get("val_matrix")
+        p_matrix = results.get("p_matrix")
+
+        adjacency = np.zeros((n, n), dtype=int)
+        scores = np.zeros((n, n), dtype=float)
+        lagm = np.zeros((n, n), dtype=int)
+        signm = np.zeros((n, n), dtype=int)
+
+        if graph is not None:
+            for i in range(n):
+                for j in range(n):
+                    if i == j:
+                        continue
+                    best_abs = 0.0
+                    best_tau = 0
+                    best_sign = 0
+                    found = False
+                    # ignore tau=0 for this structural-lag benchmark
+                    for tau in range(1, min(self.tau_max, graph.shape[2] - 1) + 1):
+                        g = graph[i, j, tau]
+                        if isinstance(g, bytes):
+                            g = g.decode()
+                        if g is None:
+                            g = ""
+                        if str(g).strip() != "":
+                            found = True
+                            val = 0.0
+                            if val_matrix is not None:
+                                try:
+                                    val = float(val_matrix[i, j, tau])
+                                except Exception:
+                                    val = 0.0
+                            if abs(val) >= best_abs:
+                                best_abs = abs(val)
+                                best_tau = tau
+                                best_sign = int(np.sign(val)) if val != 0 else 0
+                    adjacency[i, j] = int(found)
+                    scores[i, j] = best_abs
+                    lagm[i, j] = best_tau
+                    signm[i, j] = best_sign
+
+        np.fill_diagonal(adjacency, 0)
+        np.fill_diagonal(scores, 0.0)
+        np.fill_diagonal(lagm, 0)
+        np.fill_diagonal(signm, 0)
+
+        return MethodOutput(
+            method_name=self.method_name,
+            names=names,
+            adjacency_scores=scores,
+            adjacency_bin=adjacency,
+            directed_support=True,
+            lag_support=True,
+            sign_support=True,
+            regime_support=False,
+            lag_matrix=lagm,
+            sign_matrix=signm,
+            meta={
+                "pc_alpha": self.pc_alpha,
+                "tau_max": self.tau_max,
+                "p_matrix": p_matrix,
+                "backend": "tigramite_pcmciplus",
+            },
         )
 
 
@@ -910,40 +1070,189 @@ class EventCrossCorrelationAdapter(BaseAdapter):
             meta={"event_percentile": self.event_percentile, "pvalues": pvals},
         )
 
-
 def make_lambda3_adapter(
     runner: Callable[[pd.DataFrame, ScenarioConfig], Dict[str, Any]],
     method_name: str = "Lambda3",
 ) -> BaseAdapter:
     """
     Create an adapter from the user's Lambda3 runner.
+    Parallelized version for A100 / high-core environments.
     """
     class _Lambda3Adapter(BaseAdapter):
         def __init__(self):
             self.method_name = method_name
 
         def fit(self, df: pd.DataFrame, cfg: ScenarioConfig) -> MethodOutput:
-            out = runner(df, cfg)
+            """
+            Lambda3 adapter fit (parallel version)
+
+            Key features
+            -------------
+            1) unordered pair only: (i, j) with i < j
+            2) one detector call per pair
+            3) ThreadPoolExecutor for parallel MCMC across pairs
+            4) forward/backward written separately to adjacency
+            5) dominant-direction rule avoids spurious bidirectional edges
+            """
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            names = list(df.columns)
+            n = len(names)
+
+            scores = np.zeros((n, n), dtype=float)
+            adjacency = np.zeros((n, n), dtype=int)
+            lagm = np.zeros((n, n), dtype=int)
+            signm = np.zeros((n, n), dtype=int)
+
+            # tune these if needed
+            edge_threshold = getattr(self, "edge_threshold", 0.25)
+            asymmetry_ratio_threshold = getattr(self, "asymmetry_ratio_threshold", 1.5)
+            detector_mode = getattr(self, "detector_mode", "bidirectional")
+            verbose = getattr(self, "verbose", False)
+
+            def _extract_directional(result):
+                """
+                Normalize result schema from Lambda3 detectors.
+                """
+                # Bidirectional detector
+                if "forward" in result and "backward" in result:
+                    fwd = result["forward"]
+                    bwd = result["backward"]
+                    fwd_beta = float(fwd.get("beta_lambda", fwd.get("beta", 0.0)))
+                    bwd_beta = float(bwd.get("beta_lambda", bwd.get("beta", 0.0)))
+                    fwd_lag = int(fwd.get("lag", result.get("lag", 0)))
+                    bwd_lag = int(bwd.get("lag", result.get("lag", 0)))
+                    return fwd_beta, bwd_beta, fwd_lag, bwd_lag
+
+                # Hierarchical detector
+                if "pairwise_results" in result and result["pairwise_results"] is not None:
+                    pr = result["pairwise_results"]
+                    fwd = pr.get("forward", {})
+                    bwd = pr.get("backward", {})
+                    fwd_beta = float(fwd.get("beta_lambda", fwd.get("beta", 0.0)))
+                    bwd_beta = float(bwd.get("beta_lambda", bwd.get("beta", 0.0)))
+                    main_lag = int(result.get("lag", 0))
+                    fwd_lag = int(fwd.get("lag", main_lag))
+                    bwd_lag = int(bwd.get("lag", main_lag))
+                    return fwd_beta, bwd_beta, fwd_lag, bwd_lag
+
+                return 0.0, 0.0, 0, 0
+
+            # ---------------------------------------------------------
+            # Build pair list
+            # ---------------------------------------------------------
+            pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+
+            def _run_pair(pair_tuple):
+                i, j = pair_tuple
+                pair_data = df.iloc[:, [i, j]].to_numpy()
+                local_detector = create_lambda3_detector(
+                    mode=detector_mode,
+                    verbose=verbose
+                )
+                try:
+                    result = local_detector.detect(pair_data)
+
+                    # ★★★ デバッグ：returnの前！★★★
+                    print(f"=== DEBUG: pair ({names[i]}, {names[j]}) ===")
+                    print(f"result keys: {list(result.keys())}")
+                    if "forward" in result:
+                        print(f"  forward beta: {result['forward'].get('beta', 'N/A')}")
+                        print(f"  forward beta_lambda: {result['forward'].get('beta_lambda', 'N/A')}")
+                        print(f"  backward beta: {result['backward'].get('beta', 'N/A')}")
+                    if "primary_beta" in result:
+                        print(f"  primary_beta: {result['primary_beta']}")
+
+                    fwd_beta, bwd_beta, fwd_lag, bwd_lag = _extract_directional(result)
+                    print(f"  extracted: fwd={fwd_beta:.4f}, bwd={bwd_beta:.4f}, edge_threshold={edge_threshold}")
+                    
+                    return (i, j, fwd_beta, bwd_beta, fwd_lag, bwd_lag, True)
+                except Exception as e:
+                    if verbose:
+                        print(f"[{self.method_name}] pair ({names[i]}, {names[j]}) failed: {e}")
+                    return (i, j, 0.0, 0.0, 0, 0, False) 
+
+            # ---------------------------------------------------------
+            # Parallel execution
+            # ---------------------------------------------------------
+            max_workers = min(len(pairs), 6)  # A100: safe up to 6
+            pair_results = []
+
+            if max_workers > 1:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(_run_pair, p): p for p in pairs}
+                    for future in as_completed(futures):
+                        pair_results.append(future.result())
+            else:
+                # Single pair: no need for thread overhead
+                for p in pairs:
+                    pair_results.append(_run_pair(p))
+
+            # ---------------------------------------------------------
+            # Write results to adjacency matrix
+            # ---------------------------------------------------------
+            for (i, j, beta_ij, beta_ji, lag_ij, lag_ji, success) in pair_results:
+                if not success:
+                    continue
+
+                a_ij = abs(beta_ij)
+                a_ji = abs(beta_ji)
+
+                if a_ij < edge_threshold and a_ji < edge_threshold:
+                    continue
+
+                # strong asymmetry => keep only dominant direction
+                if a_ij >= edge_threshold and a_ij >= asymmetry_ratio_threshold * max(a_ji, 1e-12):
+                    adjacency[i, j] = 1
+                    scores[i, j] = a_ij
+                    lagm[i, j] = lag_ij
+                    signm[i, j] = int(np.sign(beta_ij))
+
+                elif a_ji >= edge_threshold and a_ji >= asymmetry_ratio_threshold * max(a_ij, 1e-12):
+                    adjacency[j, i] = 1
+                    scores[j, i] = a_ji
+                    lagm[j, i] = lag_ji
+                    signm[j, i] = int(np.sign(beta_ji))
+
+                else:
+                    # near-symmetric: keep both if above threshold
+                    if a_ij >= edge_threshold:
+                        adjacency[i, j] = 1
+                        scores[i, j] = a_ij
+                        lagm[i, j] = lag_ij
+                        signm[i, j] = int(np.sign(beta_ij))
+
+                    if a_ji >= edge_threshold:
+                        adjacency[j, i] = 1
+                        scores[j, i] = a_ji
+                        lagm[j, i] = lag_ji
+                        signm[j, i] = int(np.sign(beta_ji))
+
+            np.fill_diagonal(scores, 0.0)
+            np.fill_diagonal(adjacency, 0)
+            np.fill_diagonal(lagm, 0)
+            np.fill_diagonal(signm, 0)
+
             return MethodOutput(
                 method_name=self.method_name,
-                names=list(df.columns),
-                adjacency_scores=out.get("adjacency_scores"),
-                adjacency_bin=out.get("adjacency_bin"),
+                names=names,
+                adjacency_scores=scores,
+                adjacency_bin=adjacency,
                 directed_support=True,
-                lag_support=out.get("lag_matrix") is not None,
-                sign_support=out.get("sign_matrix") is not None,
-                regime_support=out.get("regime_boundaries") is not None or out.get("adjacency_by_regime") is not None,
-                lag_matrix=out.get("lag_matrix"),
-                sign_matrix=out.get("sign_matrix"),
-                regime_boundaries=out.get("regime_boundaries"),
-                adjacency_by_regime=out.get("adjacency_by_regime"),
-                lag_by_regime=out.get("lag_by_regime"),
-                sign_by_regime=out.get("sign_by_regime"),
-                meta=out.get("meta", {}),
+                lag_support=True,
+                sign_support=False,
+                regime_support=False,
+                lag_matrix=lagm,
+                sign_matrix=None,
+                meta={
+                    "edge_threshold": edge_threshold,
+                    "asymmetry_ratio_threshold": asymmetry_ratio_threshold,
+                    "detector_mode": detector_mode,
+                    "max_workers": max_workers,
+                },
             )
 
     return _Lambda3Adapter()
-
 
 # ---------------------------------------------------------------------
 # Evaluation
@@ -1347,12 +1656,13 @@ def example_lambda3_runner_stub(df: pd.DataFrame, cfg: ScenarioConfig) -> Dict[s
 # ---------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------
-
 def main(enable_lambda3: bool = False, repeats: int = 5) -> None:
     cfg = ScenarioConfig(T=350, burn_in=80, regime_split=175, max_lag=8, noise_scale=0.35)
     adapters: List[BaseAdapter] = [
         VARGrangerAdapter(maxlags=8, alpha=0.05),
-        TransferEntropyAdapter(max_lag=8, alpha=0.05, n_bins=4, n_perm=20),
+        TransferEntropyAdapter(max_lag=8, alpha=0.05, n_bins=4, n_perm=20, backend="pyinform", k_history=1),
+        # Optional additional causal-discovery baseline (uncomment if tigramite is installed)
+        PCMCIPlusAdapter(tau_max=8, pc_alpha=0.05, verbosity=0),
         GraphicalLassoAdapter(edge_threshold=0.03),
         EventCrossCorrelationAdapter(max_lag=8, event_percentile=97.0, alpha=0.05, n_perm=20),
     ]
@@ -1376,7 +1686,6 @@ def main(enable_lambda3: bool = False, repeats: int = 5) -> None:
     else:
         print("  - Lambda3 path: DISABLED (baselines only)")
 
-
 if __name__ == "__main__":
     # Set enable_lambda3=True once your Lambda3 functions are available.
-    main(enable_lambda3=True, repeats=5)
+    main(enable_lambda3=True, repeats=1)
