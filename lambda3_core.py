@@ -29,10 +29,21 @@ import numpy as np
 import pandas as pd
 
 # ===============================
-# Probabilistic Programming
+# Probabilistic Programming (optional — only needed for estimator="bayesian")
 # ===============================
-import pymc as pm
-import arviz as az
+try:
+    import pymc as pm
+    _HAS_PYMC = True
+except ImportError:
+    pm = None
+    _HAS_PYMC = False
+
+try:
+    import arviz as az
+    _HAS_ARVIZ = True
+except ImportError:
+    az = None
+    _HAS_ARVIZ = False
 
 # ===============================
 # Machine Learning & Clustering
@@ -95,6 +106,8 @@ class L3Config:
     hierarchical: bool = True
     multiscale: bool = True
     multiscale_windows: tuple = (5, 10, 20, 50)
+    estimator: str = "bootstrap"    # "bootstrap" (fast, numpy-only) or "bayesian" (PyMC)
+    n_bootstrap: int = 2000
 
 
 # ===================================================================
@@ -522,7 +535,7 @@ class BayesianHDILogger:
         series_names: Optional[List[str]] = None,
         verbose: bool = True,
     ) -> Dict[str, Any]:
-        summary = az.summary(trace, hdi_prob=self.hdi_prob)
+        summary = _get_summary(trace, self.hdi_prob)
         hdi = self._extract_hdi(summary)
         classified = self._classify(hdi, model_type, series_names)
         self.all_results[model_id] = {
@@ -624,8 +637,143 @@ class BayesianHDILogger:
 
 
 # ===================================================================
-#  SECTION 5: BAYESIAN MODELS
+#  SECTION 5: ESTIMATION ENGINE (Bootstrap / Bayesian)
 # ===================================================================
+
+# ----- Compatibility layer -----
+
+def _get_summary(trace, hdi_prob: float = 0.94) -> pd.DataFrame:
+    """Get parameter summary from either bootstrap or Bayesian trace.
+
+    Bootstrap results are already DataFrames; Bayesian traces are
+    summarised via ``arviz``.  This function unifies both paths so
+    downstream code never needs to check.
+    """
+    if isinstance(trace, pd.DataFrame):
+        return trace
+    if not _HAS_ARVIZ:
+        raise RuntimeError(
+            "arviz is required for Bayesian trace summaries. "
+            "Install it or use estimator='bootstrap'.")
+    return az.summary(trace, hdi_prob=hdi_prob)
+
+
+# ----- Bootstrap OLS core -----
+
+def _bootstrap_ols(
+    y: np.ndarray,
+    X: np.ndarray,
+    param_names: List[str],
+    n_bootstrap: int = 2000,
+    hdi_prob: float = 0.94,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """OLS regression with bootstrap confidence intervals.
+
+    Returns a DataFrame with the same structure as ``az.summary()``:
+    columns ``mean``, ``sd``, ``hdi_{lo}%``, ``hdi_{hi}%``.
+
+    Parameters
+    ----------
+    y : (n,) array — target variable.
+    X : (n, p) array — design matrix (should include intercept column).
+    param_names : list of str — names for each column of X.
+    n_bootstrap : int — number of resamples.
+    hdi_prob : float — credible interval width (e.g. 0.94).
+    seed : int — random seed.
+
+    Returns
+    -------
+    pd.DataFrame — summary compatible with ``az.summary()`` output.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(y)
+
+    # Point estimate via OLS
+    beta_hat, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+
+    # Residuals for sigma estimate
+    residuals = y - X @ beta_hat
+    sigma_hat = float(np.std(residuals))
+
+    # Bootstrap
+    betas = np.empty((n_bootstrap, X.shape[1]))
+    sigmas = np.empty(n_bootstrap)
+    for b in range(n_bootstrap):
+        idx = rng.choice(n, n, replace=True)
+        try:
+            betas[b], _, _, _ = np.linalg.lstsq(X[idx], y[idx], rcond=None)
+        except np.linalg.LinAlgError:
+            betas[b] = beta_hat
+        res_b = y[idx] - X[idx] @ betas[b]
+        sigmas[b] = np.std(res_b)
+
+    # HDI percentiles
+    lo_pct = (1 - hdi_prob) / 2 * 100
+    hi_pct = (1 + hdi_prob) / 2 * 100
+    lo_col = f"hdi_{lo_pct:.0f}%"
+    hi_col = f"hdi_{hi_pct:.0f}%"
+
+    # Build summary DataFrame
+    rows = {}
+    for i, name in enumerate(param_names):
+        rows[name] = {
+            "mean": float(beta_hat[i]),
+            "sd": float(np.std(betas[:, i])),
+            lo_col: float(np.percentile(betas[:, i], lo_pct)),
+            hi_col: float(np.percentile(betas[:, i], hi_pct)),
+        }
+
+    # Add sigma_obs (observation noise)
+    rows["sigma_obs"] = {
+        "mean": sigma_hat,
+        "sd": float(np.std(sigmas)),
+        lo_col: float(np.percentile(sigmas, lo_pct)),
+        hi_col: float(np.percentile(sigmas, hi_pct)),
+    }
+
+    return pd.DataFrame(rows).T
+
+
+def _build_design_matrix(
+    features: Dict[str, np.ndarray],
+    interact_pos: Optional[np.ndarray] = None,
+    interact_neg: Optional[np.ndarray] = None,
+    interact_abs: Optional[np.ndarray] = None,
+    interact_rhoT: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, List[str]]:
+    """Build design matrix and parameter names for asymmetric regression."""
+    n = len(features["time_trend"])
+    cols = [np.ones(n)]
+    names = ["beta_0"]
+
+    cols.append(features["time_trend"])
+    names.append("beta_time")
+    cols.append(features["delta_LambdaC_pos"])
+    names.append("beta_dLC_pos")
+    cols.append(features["delta_LambdaC_neg"])
+    names.append("beta_dLC_neg")
+    cols.append(features["rho_T"])
+    names.append("beta_rhoT")
+
+    if interact_pos is not None:
+        cols.append(interact_pos)
+        names.append("beta_interact_pos")
+    if interact_neg is not None:
+        cols.append(interact_neg)
+        names.append("beta_interact_neg")
+    if interact_abs is not None:
+        cols.append(interact_abs)
+        names.append("beta_interact_abs")
+    if interact_rhoT is not None:
+        cols.append(interact_rhoT)
+        names.append("beta_interact_stress")
+
+    X = np.column_stack(cols)
+    return X, names
+
+
+# ----- Fit functions (dual-mode) -----
 
 def fit_asymmetric_regression(
     data: np.ndarray,
@@ -638,55 +786,68 @@ def fit_asymmetric_regression(
     logger: Optional[BayesianHDILogger] = None,
     model_name: Optional[str] = None,
 ):
-    """Bayesian regression with asymmetric cross-series interactions.
+    """Regression with asymmetric cross-series interactions.
+
+    Supports two estimators selected via ``config.estimator``:
+      - ``"bootstrap"`` — OLS + bootstrap CI (fast, numpy-only)
+      - ``"bayesian"``  — PyMC MCMC (accurate, requires pymc)
+
+    Both return a trace-like object compatible with downstream
+    ``_get_summary()`` calls.
 
     Parameters
     ----------
     interact_pos, interact_neg : array, optional
-        Signed structural change from the source series (ΔΛC±).
-        These capture *directional* influence but cancel out when
-        the causal effect alternates in sign (ΛF rotation).
+        Signed ΔΛC± from source series.
     interact_abs : array, optional
-        ΛF-invariant coupling — total event intensity from the
-        source (|ΔΛC|).  Detects "a jump happened" regardless of
-        sign, like measuring light intensity without a polarising
-        filter.  Essential for phase-modulated hidden causality.
+        ΛF-invariant coupling (|ΔΛC|).
     interact_rhoT : array, optional
-        Tension scalar from the source series.
+        Tension scalar from source series.
     """
-    with pm.Model():
-        b0 = pm.Normal("beta_0", mu=0, sigma=2)
-        bt = pm.Normal("beta_time", mu=0, sigma=1)
-        bp = pm.Normal("beta_dLC_pos", mu=0, sigma=5)
-        bn = pm.Normal("beta_dLC_neg", mu=0, sigma=5)
-        br = pm.Normal("beta_rhoT", mu=0, sigma=3)
+    if config.estimator == "bootstrap":
+        X, names = _build_design_matrix(
+            features, interact_pos, interact_neg, interact_abs, interact_rhoT)
+        trace = _bootstrap_ols(
+            data, X, names,
+            n_bootstrap=config.n_bootstrap,
+            hdi_prob=config.hdi_prob)
 
-        mu = (b0 + bt * features["time_trend"]
-              + bp * features["delta_LambdaC_pos"]
-              + bn * features["delta_LambdaC_neg"]
-              + br * features["rho_T"])
+    else:  # bayesian
+        import pymc as pm
+        with pm.Model():
+            b0 = pm.Normal("beta_0", mu=0, sigma=2)
+            bt = pm.Normal("beta_time", mu=0, sigma=1)
+            bp = pm.Normal("beta_dLC_pos", mu=0, sigma=5)
+            bn = pm.Normal("beta_dLC_neg", mu=0, sigma=5)
+            br = pm.Normal("beta_rhoT", mu=0, sigma=3)
 
-        if interact_pos is not None:
-            bip = pm.Normal("beta_interact_pos", mu=0, sigma=3)
-            mu = mu + bip * interact_pos
-        if interact_neg is not None:
-            bin_ = pm.Normal("beta_interact_neg", mu=0, sigma=3)
-            mu = mu + bin_ * interact_neg
-        if interact_abs is not None:
-            bia = pm.Normal("beta_interact_abs", mu=0, sigma=3)
-            mu = mu + bia * interact_abs
-        if interact_rhoT is not None:
-            bis = pm.Normal("beta_interact_stress", mu=0, sigma=2)
-            mu = mu + bis * interact_rhoT
+            mu = (b0 + bt * features["time_trend"]
+                  + bp * features["delta_LambdaC_pos"]
+                  + bn * features["delta_LambdaC_neg"]
+                  + br * features["rho_T"])
 
-        sig = pm.HalfNormal("sigma_obs", sigma=1)
-        pm.Normal("y_obs", mu=mu, sigma=sig, observed=data)
+            if interact_pos is not None:
+                bip = pm.Normal("beta_interact_pos", mu=0, sigma=3)
+                mu = mu + bip * interact_pos
+            if interact_neg is not None:
+                bin_ = pm.Normal("beta_interact_neg", mu=0, sigma=3)
+                mu = mu + bin_ * interact_neg
+            if interact_abs is not None:
+                bia = pm.Normal("beta_interact_abs", mu=0, sigma=3)
+                mu = mu + bia * interact_abs
+            if interact_rhoT is not None:
+                bis = pm.Normal("beta_interact_stress", mu=0, sigma=2)
+                mu = mu + bis * interact_rhoT
 
-        trace = pm.sample(draws=config.draws, tune=config.tune,
-                          target_accept=config.target_accept,
-                          return_inferencedata=True, cores=4, chains=4)
+            sig = pm.HalfNormal("sigma_obs", sigma=1)
+            pm.Normal("y_obs", mu=mu, sigma=sig, observed=data)
+
+            trace = pm.sample(draws=config.draws, tune=config.tune,
+                              target_accept=config.target_accept,
+                              return_inferencedata=True, cores=4, chains=4)
 
     if logger is not None:
+        summary = _get_summary(trace, config.hdi_prob)
         logger.log_trace(trace, model_name or "asymmetric_regression",
                          "asymmetric_regression", verbose=False)
     return trace
@@ -701,91 +862,148 @@ def fit_pairwise_system(
 ):
     """Pairwise bidirectional structural tensor model.
 
-    Models A→B and B→A interactions simultaneously in a joint
-    multivariate-normal observation model with correlation (ρ_ab).
+    Bootstrap mode runs two separate OLS regressions (A→B, B→A)
+    and estimates residual correlation.  Bayesian mode fits a joint
+    multivariate-normal observation model.
     """
     names = list(series_pair) if series_pair else list(data_dict.keys())[:2]
     na, nb = names
     da, db = data_dict[na], data_dict[nb]
     fa, fb = features_dict[na], features_dict[nb]
 
-    with pm.Model() as model:
-        # --- Series A self terms ---
-        b0a = pm.Normal("beta_0_a", mu=0, sigma=2)
-        bta = pm.Normal("beta_time_a", mu=0, sigma=1)
-        bpa = pm.Normal("beta_dLC_pos_a", mu=0, sigma=3)
-        bna = pm.Normal("beta_dLC_neg_a", mu=0, sigma=3)
-        bra = pm.Normal("beta_rhoT_a", mu=0, sigma=2)
+    abs_a = fa["delta_LambdaC_pos"] + fa["delta_LambdaC_neg"]
+    abs_b = fb["delta_LambdaC_pos"] + fb["delta_LambdaC_neg"]
 
-        # --- Series B self terms ---
-        b0b = pm.Normal("beta_0_b", mu=0, sigma=2)
-        btb = pm.Normal("beta_time_b", mu=0, sigma=1)
-        bpb = pm.Normal("beta_dLC_pos_b", mu=0, sigma=3)
-        bnb = pm.Normal("beta_dLC_neg_b", mu=0, sigma=3)
-        brb = pm.Normal("beta_rhoT_b", mu=0, sigma=2)
+    if config.estimator == "bootstrap":
+        # --- Build design matrices ---
+        lag_a = np.concatenate([[0], da[:-1]]) if len(da) > 1 else np.zeros_like(da)
+        lag_b = np.concatenate([[0], db[:-1]]) if len(db) > 1 else np.zeros_like(db)
+        n = len(da)
+        ones = np.ones(n)
 
-        # --- Cross interactions (signed) ---
-        bi_ab_p = pm.Normal("beta_interact_ab_pos", mu=0, sigma=2)
-        bi_ab_n = pm.Normal("beta_interact_ab_neg", mu=0, sigma=2)
-        bi_ab_s = pm.Normal("beta_interact_ab_stress", mu=0, sigma=1.5)
-        bi_ba_p = pm.Normal("beta_interact_ba_pos", mu=0, sigma=2)
-        bi_ba_n = pm.Normal("beta_interact_ba_neg", mu=0, sigma=2)
-        bi_ba_s = pm.Normal("beta_interact_ba_stress", mu=0, sigma=1.5)
-
-        # --- Cross interactions (ΛF-invariant — absolute event coupling) ---
-        bi_ab_a = pm.Normal("beta_interact_ab_abs", mu=0, sigma=2)
-        bi_ba_a = pm.Normal("beta_interact_ba_abs", mu=0, sigma=2)
-
-        # Compute |ΔΛC| for each series (sign-invariant event intensity)
-        abs_a = fa["delta_LambdaC_pos"] + fa["delta_LambdaC_neg"]
-        abs_b = fb["delta_LambdaC_pos"] + fb["delta_LambdaC_neg"]
-
-        # --- Lag terms ---
-        if len(da) > 1:
-            lag_a = np.concatenate([[0], da[:-1]])
-            lag_b = np.concatenate([[0], db[:-1]])
-            bl_ab = pm.Normal("beta_lag_ab", mu=0, sigma=1)
-            bl_ba = pm.Normal("beta_lag_ba", mu=0, sigma=1)
-        else:
-            lag_a = np.zeros_like(da)
-            lag_b = np.zeros_like(db)
-            bl_ab = bl_ba = 0
-
-        mu_a = (b0a + bta * fa["time_trend"]
-                + bpa * fa["delta_LambdaC_pos"]
-                + bna * fa["delta_LambdaC_neg"]
-                + bra * fa["rho_T"]
-                + bi_ba_p * fb["delta_LambdaC_pos"]
-                + bi_ba_n * fb["delta_LambdaC_neg"]
-                + bi_ba_a * abs_b
-                + bi_ba_s * fb["rho_T"]
-                + bl_ba * lag_b)
-
-        mu_b = (b0b + btb * fb["time_trend"]
-                + bpb * fb["delta_LambdaC_pos"]
-                + bnb * fb["delta_LambdaC_neg"]
-                + brb * fb["rho_T"]
-                + bi_ab_p * fa["delta_LambdaC_pos"]
-                + bi_ab_n * fa["delta_LambdaC_neg"]
-                + bi_ab_a * abs_a
-                + bi_ab_s * fa["rho_T"]
-                + bl_ab * lag_a)
-
-        sa = pm.HalfNormal("sigma_a", sigma=1)
-        sb = pm.HalfNormal("sigma_b", sigma=1)
-        rho_ab = pm.Uniform("rho_ab", lower=-1, upper=1)
-        cov = pm.math.stack([
-            [sa ** 2, rho_ab * sa * sb],
-            [rho_ab * sa * sb, sb ** 2],
+        # Design matrix for A (B→A interactions)
+        Xa = np.column_stack([
+            ones, fa["time_trend"],
+            fa["delta_LambdaC_pos"], fa["delta_LambdaC_neg"], fa["rho_T"],
+            fb["delta_LambdaC_pos"], fb["delta_LambdaC_neg"], abs_b, fb["rho_T"],
+            lag_b,
         ])
+        names_a = [
+            "beta_0_a", "beta_time_a",
+            "beta_dLC_pos_a", "beta_dLC_neg_a", "beta_rhoT_a",
+            "beta_interact_ba_pos", "beta_interact_ba_neg", "beta_interact_ba_abs",
+            "beta_interact_ba_stress", "beta_lag_ba",
+        ]
 
-        y_comb = pm.math.stack([da, db]).T
-        mu_comb = pm.math.stack([mu_a, mu_b]).T
-        pm.MvNormal("y_obs", mu=mu_comb, cov=cov, observed=y_comb)
+        # Design matrix for B (A→B interactions)
+        Xb = np.column_stack([
+            ones, fb["time_trend"],
+            fb["delta_LambdaC_pos"], fb["delta_LambdaC_neg"], fb["rho_T"],
+            fa["delta_LambdaC_pos"], fa["delta_LambdaC_neg"], abs_a, fa["rho_T"],
+            lag_a,
+        ])
+        names_b = [
+            "beta_0_b", "beta_time_b",
+            "beta_dLC_pos_b", "beta_dLC_neg_b", "beta_rhoT_b",
+            "beta_interact_ab_pos", "beta_interact_ab_neg", "beta_interact_ab_abs",
+            "beta_interact_ab_stress", "beta_lag_ab",
+        ]
 
-        trace = pm.sample(draws=config.draws, tune=config.tune,
-                          target_accept=config.target_accept,
-                          return_inferencedata=True, cores=4, chains=4)
+        # Run bootstrap for both
+        sum_a = _bootstrap_ols(da, Xa, names_a, config.n_bootstrap, config.hdi_prob)
+        sum_b = _bootstrap_ols(db, Xb, names_b, config.n_bootstrap, config.hdi_prob)
+
+        # Estimate residual correlation
+        beta_a = np.linalg.lstsq(Xa, da, rcond=None)[0]
+        beta_b = np.linalg.lstsq(Xb, db, rcond=None)[0]
+        res_a = da - Xa @ beta_a
+        res_b = db - Xb @ beta_b
+        rho_val = float(np.corrcoef(res_a, res_b)[0, 1])
+
+        lo_pct = (1 - config.hdi_prob) / 2 * 100
+        hi_pct = (1 + config.hdi_prob) / 2 * 100
+        lo_col = f"hdi_{lo_pct:.0f}%"
+        hi_col = f"hdi_{hi_pct:.0f}%"
+
+        # Rename sigma columns
+        sum_a = sum_a.rename(index={"sigma_obs": "sigma_a"})
+        sum_b = sum_b.rename(index={"sigma_obs": "sigma_b"})
+
+        # Combine into single summary
+        trace = pd.concat([sum_a, sum_b])
+        trace.loc["rho_ab"] = {
+            "mean": rho_val, "sd": 0.0, lo_col: rho_val, hi_col: rho_val}
+        model = None
+
+    else:  # bayesian
+        import pymc as pm
+        with pm.Model() as model:
+            b0a = pm.Normal("beta_0_a", mu=0, sigma=2)
+            bta = pm.Normal("beta_time_a", mu=0, sigma=1)
+            bpa = pm.Normal("beta_dLC_pos_a", mu=0, sigma=3)
+            bna = pm.Normal("beta_dLC_neg_a", mu=0, sigma=3)
+            bra = pm.Normal("beta_rhoT_a", mu=0, sigma=2)
+
+            b0b = pm.Normal("beta_0_b", mu=0, sigma=2)
+            btb = pm.Normal("beta_time_b", mu=0, sigma=1)
+            bpb = pm.Normal("beta_dLC_pos_b", mu=0, sigma=3)
+            bnb = pm.Normal("beta_dLC_neg_b", mu=0, sigma=3)
+            brb = pm.Normal("beta_rhoT_b", mu=0, sigma=2)
+
+            bi_ab_p = pm.Normal("beta_interact_ab_pos", mu=0, sigma=2)
+            bi_ab_n = pm.Normal("beta_interact_ab_neg", mu=0, sigma=2)
+            bi_ab_s = pm.Normal("beta_interact_ab_stress", mu=0, sigma=1.5)
+            bi_ba_p = pm.Normal("beta_interact_ba_pos", mu=0, sigma=2)
+            bi_ba_n = pm.Normal("beta_interact_ba_neg", mu=0, sigma=2)
+            bi_ba_s = pm.Normal("beta_interact_ba_stress", mu=0, sigma=1.5)
+            bi_ab_a = pm.Normal("beta_interact_ab_abs", mu=0, sigma=2)
+            bi_ba_a = pm.Normal("beta_interact_ba_abs", mu=0, sigma=2)
+
+            if len(da) > 1:
+                lag_a = np.concatenate([[0], da[:-1]])
+                lag_b = np.concatenate([[0], db[:-1]])
+                bl_ab = pm.Normal("beta_lag_ab", mu=0, sigma=1)
+                bl_ba = pm.Normal("beta_lag_ba", mu=0, sigma=1)
+            else:
+                lag_a = np.zeros_like(da)
+                lag_b = np.zeros_like(db)
+                bl_ab = bl_ba = 0
+
+            mu_a = (b0a + bta * fa["time_trend"]
+                    + bpa * fa["delta_LambdaC_pos"]
+                    + bna * fa["delta_LambdaC_neg"]
+                    + bra * fa["rho_T"]
+                    + bi_ba_p * fb["delta_LambdaC_pos"]
+                    + bi_ba_n * fb["delta_LambdaC_neg"]
+                    + bi_ba_a * abs_b
+                    + bi_ba_s * fb["rho_T"]
+                    + bl_ba * lag_b)
+
+            mu_b = (b0b + btb * fb["time_trend"]
+                    + bpb * fb["delta_LambdaC_pos"]
+                    + bnb * fb["delta_LambdaC_neg"]
+                    + brb * fb["rho_T"]
+                    + bi_ab_p * fa["delta_LambdaC_pos"]
+                    + bi_ab_n * fa["delta_LambdaC_neg"]
+                    + bi_ab_a * abs_a
+                    + bi_ab_s * fa["rho_T"]
+                    + bl_ab * lag_a)
+
+            sa = pm.HalfNormal("sigma_a", sigma=1)
+            sb = pm.HalfNormal("sigma_b", sigma=1)
+            rho_ab = pm.Uniform("rho_ab", lower=-1, upper=1)
+            cov = pm.math.stack([
+                [sa ** 2, rho_ab * sa * sb],
+                [rho_ab * sa * sb, sb ** 2],
+            ])
+
+            y_comb = pm.math.stack([da, db]).T
+            mu_comb = pm.math.stack([mu_a, mu_b]).T
+            pm.MvNormal("y_obs", mu=mu_comb, cov=cov, observed=y_comb)
+
+            trace = pm.sample(draws=config.draws, tune=config.tune,
+                              target_accept=config.target_accept,
+                              return_inferencedata=True, cores=4, chains=4)
 
     if logger is not None:
         mid = f"pairwise_{na}_vs_{nb}"
@@ -800,34 +1018,63 @@ def fit_hierarchical_bayesian(
     config: L3Config,
     logger: Optional[BayesianHDILogger] = None,
 ):
-    """Hierarchical Bayesian model for multi-scale structural changes."""
-    with pm.Model() as model:
-        b0 = pm.Normal("beta_0", mu=0, sigma=2)
-        bt = pm.Normal("beta_time", mu=0, sigma=1)
-        bp = pm.Normal("beta_pos", mu=0, sigma=3)
-        bn = pm.Normal("beta_neg", mu=0, sigma=3)
-        br = pm.Normal("beta_rho", mu=0, sigma=2)
-        al = pm.Normal("alpha_local", mu=0, sigma=1.5)
-        ag = pm.Normal("alpha_global", mu=0, sigma=2)
-        be = pm.Normal("beta_escalation", mu=0, sigma=1)
-        bd = pm.Normal("beta_deescalation", mu=0, sigma=1)
+    """Hierarchical model for multi-scale structural changes."""
+    _zero = np.float64(0.0)
 
-        _zero = np.float64(0.0)
-        mu = (b0 + bt * h_features["time_trend"]
-              + bp * h_features["delta_LambdaC_pos"]
-              + bn * h_features["delta_LambdaC_neg"]
-              + br * h_features["rho_T"]
-              + al * h_features.get("local_rho_T", _zero)
-              + ag * h_features.get("global_rho_T", _zero)
-              + be * h_features.get("escalation_indicator", _zero)
-              + bd * h_features.get("deescalation_indicator", _zero))
+    if config.estimator == "bootstrap":
+        n = len(data)
+        ones = np.ones(n)
 
-        sig = pm.HalfNormal("sigma_obs", sigma=1)
-        pm.Normal("y_obs", mu=mu, sigma=sig, observed=data)
+        cols = [ones, h_features["time_trend"],
+                h_features["delta_LambdaC_pos"],
+                h_features["delta_LambdaC_neg"],
+                h_features["rho_T"]]
+        pnames = ["beta_0", "beta_time", "beta_pos", "beta_neg", "beta_rho"]
 
-        trace = pm.sample(draws=config.draws, tune=config.tune,
-                          target_accept=config.target_accept,
-                          return_inferencedata=True, cores=4, chains=4)
+        for feat_name, param_name in [
+            ("local_rho_T", "alpha_local"),
+            ("global_rho_T", "alpha_global"),
+            ("escalation_indicator", "beta_escalation"),
+            ("deescalation_indicator", "beta_deescalation"),
+        ]:
+            v = h_features.get(feat_name, _zero)
+            if isinstance(v, np.ndarray) and len(v) == n:
+                cols.append(v)
+                pnames.append(param_name)
+
+        X = np.column_stack(cols)
+        trace = _bootstrap_ols(data, X, pnames,
+                               config.n_bootstrap, config.hdi_prob)
+        model = None
+
+    else:  # bayesian
+        import pymc as pm
+        with pm.Model() as model:
+            b0 = pm.Normal("beta_0", mu=0, sigma=2)
+            bt = pm.Normal("beta_time", mu=0, sigma=1)
+            bp = pm.Normal("beta_pos", mu=0, sigma=3)
+            bn = pm.Normal("beta_neg", mu=0, sigma=3)
+            br = pm.Normal("beta_rho", mu=0, sigma=2)
+            al = pm.Normal("alpha_local", mu=0, sigma=1.5)
+            ag = pm.Normal("alpha_global", mu=0, sigma=2)
+            be = pm.Normal("beta_escalation", mu=0, sigma=1)
+            bd = pm.Normal("beta_deescalation", mu=0, sigma=1)
+
+            mu = (b0 + bt * h_features["time_trend"]
+                  + bp * h_features["delta_LambdaC_pos"]
+                  + bn * h_features["delta_LambdaC_neg"]
+                  + br * h_features["rho_T"]
+                  + al * h_features.get("local_rho_T", _zero)
+                  + ag * h_features.get("global_rho_T", _zero)
+                  + be * h_features.get("escalation_indicator", _zero)
+                  + bd * h_features.get("deescalation_indicator", _zero))
+
+            sig = pm.HalfNormal("sigma_obs", sigma=1)
+            pm.Normal("y_obs", mu=mu, sigma=sig, observed=data)
+
+            trace = pm.sample(draws=config.draws, tune=config.tune,
+                              target_accept=config.target_accept,
+                              return_inferencedata=True, cores=4, chains=4)
     if logger is not None:
         logger.log_trace(trace, "hierarchical", "hierarchical", verbose=True)
     return trace, model
@@ -953,7 +1200,7 @@ def extract_interaction_coefficients(
     trace, series_names: List[str]
 ) -> Dict[str, Any]:
     """Extract structural interaction coefficients from a pairwise trace."""
-    summary = az.summary(trace)
+    summary = _get_summary(trace)
     na, nb = series_names[:2]
 
     se = {}
@@ -988,7 +1235,7 @@ def predict_with_interactions(
     trace, features_dict, series_names
 ) -> Dict[str, np.ndarray]:
     """Predict series values from a fitted pairwise model."""
-    summary = az.summary(trace)
+    summary = _get_summary(trace)
     preds = {}
     for idx, nm in enumerate(series_names[:2]):
         other = series_names[1 - idx]
@@ -1356,11 +1603,13 @@ def analyze_hierarchical_separation(
 
     trace, model = fit_hierarchical_bayesian(
         data, h_feats,
-        L3Config(draws=draws, tune=tune, target_accept=config.target_accept),
+        L3Config(draws=draws, tune=tune, target_accept=config.target_accept,
+                 estimator=config.estimator, n_bootstrap=config.n_bootstrap,
+                 hdi_prob=config.hdi_prob),
         logger=logger,
     )
 
-    summary = az.summary(trace)
+    summary = _get_summary(trace)
     coeffs = {
         "escalation": _safe_extract(summary, "beta_escalation"),
         "deescalation": _safe_extract(summary, "beta_deescalation"),
@@ -2056,20 +2305,20 @@ if __name__ == "__main__":
     print("Usage:")
     print("  from lambda3_core import run_lambda3_analysis, L3Config")
     print()
-    print("  # Analyse CSV data")
+    print("  # Default: bootstrap (fast, no PyMC needed)")
     print('  results = run_lambda3_analysis("data.csv")')
     print()
-    print("  # Analyse dict data")
-    print("  results = run_lambda3_analysis({")
-    print('      "Series_A": np.cumsum(np.random.randn(500)),')
-    print('      "Series_B": np.cumsum(np.random.randn(500)),')
-    print("  })")
-    print()
-    print("  # With custom config")
-    print("  results = run_lambda3_analysis(data, config=L3Config(")
-    print("      draws=4000, tune=4000, hierarchical=True")
+    print("  # Bayesian mode (requires pymc + arviz)")
+    print('  results = run_lambda3_analysis("data.csv", config=L3Config(')
+    print('      estimator="bayesian", draws=4000, tune=4000')
     print("  ))")
     print()
-    print("Domain extensions should subclass StructuralRegimeDetector")
-    print("and override label_regimes() for domain-specific labelling.")
+    print("  # Dict input with custom bootstrap samples")
+    print("  results = run_lambda3_analysis({")
+    print('      "A": np.cumsum(np.random.randn(500)),')
+    print('      "B": np.cumsum(np.random.randn(500)),')
+    print("  }, config=L3Config(n_bootstrap=5000))")
+    print()
+    print("Minimal deps: numpy, numba, sklearn, networkx, matplotlib")
+    print("Optional deps: pymc, arviz (for estimator='bayesian')")
     print("=" * 60)
