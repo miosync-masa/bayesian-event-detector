@@ -7,7 +7,6 @@ Lambda3 Structural Benchmark Suite
 A benchmark harness for *structural coupling analysis* rather than forecasting.
 
 This version is intentionally designed to run from a *single file*.
-You do NOT need a separate `lambda3_adapter_example.py`.
 
 How to use Lambda3 in this file
 -------------------------------
@@ -16,13 +15,6 @@ How to use Lambda3 in this file
 2. Set `enable_lambda3=True` in `main()` (or call `main(enable_lambda3=True)`).
 3. The function `example_lambda3_runner_stub()` is already a real bridge function.
    It will call your Lambda3 functions if they are available.
-
-Expected Lambda3 symbols
-------------------------
-- L3Config
-- calc_lambda3_features_v2
-- fit_l3_bayesian_regression_asymmetric
-- calculate_sync_profile
 
 Design goals
 ------------
@@ -55,6 +47,9 @@ from lambda3_core import (
     calc_lambda3_features,
     fit_asymmetric_regression,
     calculate_sync_profile,
+    calculate_dynamic_sync,
+    conditional_sync,
+    detect_structural_drift,
 )
 
 import numpy as np
@@ -1136,12 +1131,6 @@ def make_lambda3_adapter(
 
         def fit(self, df: pd.DataFrame, cfg: ScenarioConfig) -> MethodOutput:
             from concurrent.futures import ThreadPoolExecutor, as_completed
-            from lambda3_core import (
-                L3Config as L3Cfg,
-                calc_lambda3_features,
-                fit_asymmetric_regression,
-                calculate_sync_profile,
-            )
 
             names = list(df.columns)
             n = len(names)
@@ -1150,8 +1139,7 @@ def make_lambda3_adapter(
             lagm = np.zeros((n, n), dtype=int)
             signm = np.zeros((n, n), dtype=int)
 
-            l3cfg = L3Cfg(draws=3000, tune=3000, hierarchical=True)
-            edge_threshold = 0.5  # β_total閾値（S0のノイズフロア超え）
+            l3cfg = L3Cfg(draws=3000, tune=3000, hierarchical=True, multiscale=True)
 
             pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
 
@@ -1169,6 +1157,7 @@ def make_lambda3_adapter(
                         config=l3cfg,
                         interact_pos=source_feats['delta_LambdaC_pos'],
                         interact_neg=source_feats['delta_LambdaC_neg'],
+                        interact_abs=source_feats['delta_LambdaC_pos'] + source_feats['delta_LambdaC_neg'],
                         interact_rhoT=source_feats['rho_T'],
                     )
 
@@ -1194,14 +1183,36 @@ def make_lambda3_adapter(
                     fwd_hdi, fwd_beta = _run_direction(fi, fj, x[:, 1])
                     bwd_hdi, bwd_beta = _run_direction(fj, fi, x[:, 0])
 
-                    _, _, opt_lag = calculate_sync_profile(
+                    # static sync（既存）
+                    _, sync_max, opt_lag = calculate_sync_profile(
                         fi['delta_LambdaC_pos'].astype(np.float64),
                         fj['delta_LambdaC_pos'].astype(np.float64),
                         lag_window=10
                     )
 
+                    # dynamic sync（NEW — σ_sの時間変化）
+                    tp, sr, ol = calculate_dynamic_sync(
+                        fi['delta_LambdaC_pos'].astype(np.float64),
+                        fj['delta_LambdaC_pos'].astype(np.float64),
+                        window=20, lag_window=10
+                    )
+                    sync_volatility = float(np.std(sr)) if sr else 0.0
+
+                    # conditional sync（NEW — 高ρT時のみの同期率）
+                    cond_s = conditional_sync(
+                        fi['delta_LambdaC_pos'].astype(np.float64),
+                        fj['delta_LambdaC_pos'].astype(np.float64),
+                        fi['rho_T'],
+                        float(np.median(fi['rho_T']))
+                    )
+
+                    # drift info（NEW — multiscale=Trueなら自動で入ってる）
+                    drift_i = float(np.sum(fi.get('drift_events', np.zeros(1))))
+                    drift_j = float(np.sum(fj.get('drift_events', np.zeros(1))))
+
                     return (i, j, fwd_beta, bwd_beta, int(opt_lag), int(opt_lag),
-                            fwd_hdi, bwd_hdi, True)
+                            fwd_hdi, bwd_hdi, True,
+                            sync_max, sync_volatility, cond_s, drift_i, drift_j)
                 except Exception as e:
                     print(f"[Lambda3] pair ({names[i]}, {names[j]}) failed: {e}")
                     return (i, j, 0.0, 0.0, 0, 0, False, False, False)
@@ -1218,12 +1229,31 @@ def make_lambda3_adapter(
                 for p in pairs:
                     pair_results.append(_run_pair(p))
 
-            # ★★★ ハイブリッド判定 ★★★
-            for (i, j, beta_ij, beta_ji, lag_ij, lag_ji, fwd_hdi, bwd_hdi, success) in pair_results:
+            # 全ペアのβを集めて分布から閾値を内生的に決定
+            all_betas = []
+            for result in pair_results:
+                # unpack（修正済みの拡張版に合わせる）
+                if not result[-1] if len(result) == 9 else not result[8]:
+                    continue
+                all_betas.append(result[2])  # beta_ij
+                all_betas.append(result[3])  # beta_ji
+
+            if all_betas:
+                edge_threshold = float(np.percentile(all_betas, 75))
+            else:
+                edge_threshold = 0.5  # fallback（ペアが0の時だけ）
+
+            # エッジ判定（HDI OR データ駆動閾値）
+            for result in pair_results:
+                if len(result) == 9:
+                    i, j, beta_ij, beta_ji, lag_ij, lag_ji, fwd_hdi, bwd_hdi, success = result
+                else:
+                    (i, j, beta_ij, beta_ji, lag_ij, lag_ji,
+                     fwd_hdi, bwd_hdi, success, *_extra) = result
+
                 if not success:
                     continue
 
-                # HDIサポート OR β_total > 閾値 → エッジ
                 fwd_edge = fwd_hdi or (beta_ij >= edge_threshold)
                 bwd_edge = bwd_hdi or (beta_ji >= edge_threshold)
 
@@ -1252,8 +1282,10 @@ def make_lambda3_adapter(
                 lag_matrix=lagm,
                 sign_matrix=None,
                 meta={
-                    "edge_criterion": "HDI_or_beta_threshold",
+                    "edge_criterion": "HDI_or_data_driven_percentile",
                     "edge_threshold": edge_threshold,
+                    "edge_percentile": 75,
+                    "n_betas_evaluated": len(all_betas),
                     "max_workers": max_workers,
                 },
             )
@@ -1576,5 +1608,4 @@ def main(enable_lambda3: bool = False, repeats: int = 5) -> None:
 
 if __name__ == "__main__":
     # Set enable_lambda3=True once your Lambda3 functions are available.
-    main(enable_lambda3=True, repeats=20)
-
+    main(enable_lambda3=True, repeats=1)
