@@ -399,7 +399,8 @@ class Lambda3DetectorBidirectional:
             primary_beta = beta_refined_BA
             primary_beta_lambda = result_BA['beta']
             primary_lag = result_BA['lag']
-        
+
+        asymmetry_ratio = result_AB['beta'] / max(result_BA['beta'], 1e-12)
         computation_time = time.time() - start_time
         
         if self.verbose:
