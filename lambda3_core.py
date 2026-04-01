@@ -634,10 +634,26 @@ def fit_asymmetric_regression(
     interact_pos: Optional[np.ndarray] = None,
     interact_neg: Optional[np.ndarray] = None,
     interact_rhoT: Optional[np.ndarray] = None,
+    interact_abs: Optional[np.ndarray] = None,
     logger: Optional[BayesianHDILogger] = None,
     model_name: Optional[str] = None,
 ):
-    """Bayesian regression with asymmetric cross-series interactions."""
+    """Bayesian regression with asymmetric cross-series interactions.
+
+    Parameters
+    ----------
+    interact_pos, interact_neg : array, optional
+        Signed structural change from the source series (ΔΛC±).
+        These capture *directional* influence but cancel out when
+        the causal effect alternates in sign (ΛF rotation).
+    interact_abs : array, optional
+        ΛF-invariant coupling — total event intensity from the
+        source (|ΔΛC|).  Detects "a jump happened" regardless of
+        sign, like measuring light intensity without a polarising
+        filter.  Essential for phase-modulated hidden causality.
+    interact_rhoT : array, optional
+        Tension scalar from the source series.
+    """
     with pm.Model():
         b0 = pm.Normal("beta_0", mu=0, sigma=2)
         bt = pm.Normal("beta_time", mu=0, sigma=1)
@@ -656,6 +672,9 @@ def fit_asymmetric_regression(
         if interact_neg is not None:
             bin_ = pm.Normal("beta_interact_neg", mu=0, sigma=3)
             mu = mu + bin_ * interact_neg
+        if interact_abs is not None:
+            bia = pm.Normal("beta_interact_abs", mu=0, sigma=3)
+            mu = mu + bia * interact_abs
         if interact_rhoT is not None:
             bis = pm.Normal("beta_interact_stress", mu=0, sigma=2)
             mu = mu + bis * interact_rhoT
@@ -705,13 +724,21 @@ def fit_pairwise_system(
         bnb = pm.Normal("beta_dLC_neg_b", mu=0, sigma=3)
         brb = pm.Normal("beta_rhoT_b", mu=0, sigma=2)
 
-        # --- Cross interactions ---
+        # --- Cross interactions (signed) ---
         bi_ab_p = pm.Normal("beta_interact_ab_pos", mu=0, sigma=2)
         bi_ab_n = pm.Normal("beta_interact_ab_neg", mu=0, sigma=2)
         bi_ab_s = pm.Normal("beta_interact_ab_stress", mu=0, sigma=1.5)
         bi_ba_p = pm.Normal("beta_interact_ba_pos", mu=0, sigma=2)
         bi_ba_n = pm.Normal("beta_interact_ba_neg", mu=0, sigma=2)
         bi_ba_s = pm.Normal("beta_interact_ba_stress", mu=0, sigma=1.5)
+
+        # --- Cross interactions (ΛF-invariant — absolute event coupling) ---
+        bi_ab_a = pm.Normal("beta_interact_ab_abs", mu=0, sigma=2)
+        bi_ba_a = pm.Normal("beta_interact_ba_abs", mu=0, sigma=2)
+
+        # Compute |ΔΛC| for each series (sign-invariant event intensity)
+        abs_a = fa["delta_LambdaC_pos"] + fa["delta_LambdaC_neg"]
+        abs_b = fb["delta_LambdaC_pos"] + fb["delta_LambdaC_neg"]
 
         # --- Lag terms ---
         if len(da) > 1:
@@ -730,6 +757,7 @@ def fit_pairwise_system(
                 + bra * fa["rho_T"]
                 + bi_ba_p * fb["delta_LambdaC_pos"]
                 + bi_ba_n * fb["delta_LambdaC_neg"]
+                + bi_ba_a * abs_b
                 + bi_ba_s * fb["rho_T"]
                 + bl_ba * lag_b)
 
@@ -739,6 +767,7 @@ def fit_pairwise_system(
                 + brb * fb["rho_T"]
                 + bi_ab_p * fa["delta_LambdaC_pos"]
                 + bi_ab_n * fa["delta_LambdaC_neg"]
+                + bi_ab_a * abs_a
                 + bi_ab_s * fa["rho_T"]
                 + bl_ab * lag_a)
 
@@ -940,6 +969,7 @@ def extract_interaction_coefficients(
         ce[direction] = {
             "pos_jump": _safe_extract(summary, f"beta_interact_{sfx}_pos"),
             "neg_jump": _safe_extract(summary, f"beta_interact_{sfx}_neg"),
+            "abs_coupling": _safe_extract(summary, f"beta_interact_{sfx}_abs"),
             "tension": _safe_extract(summary, f"beta_interact_{sfx}_stress"),
         }
 
@@ -964,6 +994,8 @@ def predict_with_interactions(
         other = series_names[1 - idx]
         s = "a" if idx == 0 else "b"
         os = "b" if idx == 0 else "a"
+        abs_other = (features_dict[other]["delta_LambdaC_pos"]
+                     + features_dict[other]["delta_LambdaC_neg"])
         preds[nm] = (
             _safe_extract(summary, f"beta_0_{s}")
             + _safe_extract(summary, f"beta_time_{s}") * features_dict[nm]["time_trend"]
@@ -972,6 +1004,7 @@ def predict_with_interactions(
             + _safe_extract(summary, f"beta_rhoT_{s}") * features_dict[nm]["rho_T"]
             + _safe_extract(summary, f"beta_interact_{os}{s}_pos") * features_dict[other]["delta_LambdaC_pos"]
             + _safe_extract(summary, f"beta_interact_{os}{s}_neg") * features_dict[other]["delta_LambdaC_neg"]
+            + _safe_extract(summary, f"beta_interact_{os}{s}_abs") * abs_other
             + _safe_extract(summary, f"beta_interact_{os}{s}_stress") * features_dict[other]["rho_T"]
         )
     return preds
