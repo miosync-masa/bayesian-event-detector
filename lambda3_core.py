@@ -93,6 +93,8 @@ class L3Config:
     target_accept: float = 0.95
     hdi_prob: float = 0.94
     hierarchical: bool = True
+    multiscale: bool = True
+    multiscale_windows: tuple = (5, 10, 20, 50)
 
 
 # ===================================================================
@@ -268,6 +270,136 @@ def _hierarchical_jumps(
     return l_pos, l_neg, g_pos, g_neg
 
 
+@njit
+def _multiscale_rho_t(data: np.ndarray, windows: np.ndarray) -> np.ndarray:
+    """Compute ρT at multiple scales simultaneously.
+
+    Returns a 2-D array of shape ``(n_windows, n_data)`` where each
+    row is the tension scalar computed at the corresponding window size.
+    """
+    n = data.shape[0]
+    n_w = windows.shape[0]
+    out = np.empty((n_w, n))
+    for wi in range(n_w):
+        w = windows[wi]
+        for i in range(n):
+            s = max(0, i - w)
+            e = i + 1
+            sub = data[s:e]
+            if (e - s) > 1:
+                m = np.mean(sub)
+                out[wi, i] = np.sqrt(np.sum((sub - m) ** 2) / (e - s))
+            else:
+                out[wi, i] = 0.0
+    return out
+
+
+@njit
+def _detect_drift(rho_multi: np.ndarray, threshold: float) -> np.ndarray:
+    """Detect gradual structural drift from multiscale ρT.
+
+    Drift is flagged where long-window ρT rises significantly
+    while short-window ρT stays low — i.e. the structure is
+    changing slowly, below the pulse-detection threshold.
+
+    Parameters
+    ----------
+    rho_multi : (n_windows, n_data)
+        Multiscale ρT, rows sorted shortest→longest window.
+    threshold : float
+        Z-score threshold for drift detection.
+
+    Returns
+    -------
+    drift : (n_data,)
+        Continuous drift score (0 = no drift, >0 = gradual change).
+    """
+    n_w, n = rho_multi.shape[0], rho_multi.shape[1]
+    drift = np.zeros(n)
+
+    if n_w < 2:
+        return drift
+
+    # Shortest and longest scale
+    short = rho_multi[0]
+    long_ = rho_multi[n_w - 1]
+
+    # Normalise each scale
+    s_mean, s_std = np.mean(short), np.std(short)
+    l_mean, l_std = np.mean(long_), np.std(long_)
+
+    for i in range(n):
+        s_z = (short[i] - s_mean) / (s_std + 1e-8)
+        l_z = (long_[i] - l_mean) / (l_std + 1e-8)
+
+        # Drift = long-scale tension is high while short-scale is NOT
+        # → gradual change that individual diffs can't catch
+        if l_z > threshold and s_z < threshold:
+            drift[i] = l_z - s_z
+
+    return drift
+
+
+def detect_structural_drift(
+    data: np.ndarray,
+    windows: tuple = (5, 10, 20, 50),
+    drift_threshold: float = 1.0,
+    break_threshold: float = 1.5,
+) -> Dict[str, Any]:
+    """Detect gradual structural changes across multiple time scales.
+
+    Complements ``_hierarchical_jumps`` which only catches abrupt
+    ΔΛC pulsations.  This function detects slow Λ deformation
+    (structural drift) that flies below the pulse-detection radar.
+
+    Parameters
+    ----------
+    data : array
+        Input time series.
+    windows : tuple of int
+        Analysis window sizes, smallest→largest.
+    drift_threshold : float
+        Z-score threshold for drift detection.
+    break_threshold : float
+        Z-score threshold for scale-break detection.
+
+    Returns
+    -------
+    dict
+        ``multiscale_rho_T``  — {window: array} of ρT per scale
+        ``drift_score``       — continuous drift intensity
+        ``drift_events``      — binary indicator of drift periods
+        ``scale_breaks``      — list of (window, indices) tuples
+    """
+    wins = np.array(sorted(windows), dtype=np.int64)
+    rho_multi = _multiscale_rho_t(data, wins)
+
+    # Drift detection
+    drift_score = _detect_drift(rho_multi, drift_threshold)
+    drift_events = (drift_score > 0).astype(np.float64)
+
+    # Scale-break detection (volatility spike at each scale)
+    scale_breaks: List[Tuple[int, List[int]]] = []
+    for wi, w in enumerate(wins):
+        r = rho_multi[wi]
+        m, s = np.mean(r), np.std(r)
+        peaks = np.where(r > m + break_threshold * s)[0]
+        if len(peaks) > 0:
+            scale_breaks.append((int(w), peaks.tolist()))
+
+    # Pack per-scale ρT into dict
+    ms_rho: Dict[int, np.ndarray] = {}
+    for wi, w in enumerate(wins):
+        ms_rho[int(w)] = rho_multi[wi]
+
+    return {
+        "multiscale_rho_T": ms_rho,
+        "drift_score": drift_score,
+        "drift_events": drift_events,
+        "scale_breaks": scale_breaks,
+    }
+
+
 # ===================================================================
 #  SECTION 3: UNIFIED FEATURE EXTRACTION
 # ===================================================================
@@ -276,7 +408,8 @@ def calc_lambda3_features(data: np.ndarray, config: L3Config) -> Dict[str, np.nd
     """Extract Lambda³ structural tensor features from a time series.
 
     Returns a dictionary containing ΔΛC±, ρT, hierarchical
-    decomposition (if ``config.hierarchical``), and auxiliary arrays.
+    decomposition (if ``config.hierarchical``), and multiscale
+    drift features (if ``config.multiscale``).
     """
     if config.hierarchical:
         lp, ln, gp, gn = _hierarchical_jumps(
@@ -315,7 +448,7 @@ def calc_lambda3_features(data: np.ndarray, config: L3Config) -> Dict[str, np.nd
         score = np.abs(diff) / (lstd + 1e-8)
         lthr = np.percentile(score, config.local_jump_percentile)
 
-        return {
+        result = {
             "data": data,
             "delta_LambdaC_pos": combined_pos,
             "delta_LambdaC_neg": combined_neg,
@@ -341,7 +474,7 @@ def calc_lambda3_features(data: np.ndarray, config: L3Config) -> Dict[str, np.nd
         lthr = np.percentile(score, config.local_jump_percentile)
         rho = _rho_t(data, config.window)
 
-        return {
+        result = {
             "data": data,
             "delta_LambdaC_pos": dp.astype(np.float64),
             "delta_LambdaC_neg": dn.astype(np.float64),
@@ -349,6 +482,17 @@ def calc_lambda3_features(data: np.ndarray, config: L3Config) -> Dict[str, np.nd
             "time_trend": np.arange(len(data), dtype=np.float64),
             "local_jump_detect": (score > lthr).astype(int),
         }
+
+    # --- Multiscale drift detection (gradual Λ deformation) ---
+    if config.multiscale:
+        drift_info = detect_structural_drift(
+            data, windows=config.multiscale_windows)
+        result["multiscale_rho_T"] = drift_info["multiscale_rho_T"]
+        result["drift_score"] = drift_info["drift_score"]
+        result["drift_events"] = drift_info["drift_events"]
+        result["scale_breaks"] = drift_info["scale_breaks"]
+
+    return result
 
 
 # ===================================================================
@@ -968,6 +1112,87 @@ def build_sync_network(
     return G
 
 
+def calculate_dynamic_sync(
+    series_a: np.ndarray,
+    series_b: np.ndarray,
+    window: int = 20,
+    lag_window: int = LAG_WINDOW_DEFAULT,
+) -> Tuple[np.ndarray, List[float], List[int]]:
+    """Time-varying synchronization rate (σ_s over time).
+
+    Slides a window across the event series and computes the
+    optimal sync rate at each position.  This reveals **when**
+    structural coupling strengthens or weakens — a static
+    ``calculate_sync_profile`` only gives a single global number.
+
+    Parameters
+    ----------
+    series_a, series_b : array
+        Binary event series (e.g. ``delta_LambdaC_pos``).
+    window : int
+        Sliding window size.
+    lag_window : int
+        Maximum lag within each window.
+
+    Returns
+    -------
+    time_points : array
+        Centre-of-window time indices.
+    sync_rates : list of float
+        σ_s at each time point.
+    optimal_lags : list of int
+        Lag achieving max sync at each time point.
+    """
+    a = series_a.astype(np.float64)
+    b = series_b.astype(np.float64)
+    T = len(a)
+    sync_rates: List[float] = []
+    optimal_lags: List[int] = []
+
+    for t in range(T - window + 1):
+        wa = a[t:t + window]
+        wb = b[t:t + window]
+        _, _, mx, opt = _sync_profile(wa, wb, lag_window)
+        sync_rates.append(float(mx))
+        optimal_lags.append(int(opt))
+
+    time_points = np.arange(window // 2, T - window // 2 + 1)
+    return time_points, sync_rates, optimal_lags
+
+
+def conditional_sync(
+    series_a: np.ndarray,
+    series_b: np.ndarray,
+    condition: np.ndarray,
+    condition_threshold: float,
+) -> float:
+    """Synchronization rate conditioned on a structural variable.
+
+    Only periods where ``condition > condition_threshold`` are
+    included.  Typical use: compute sync only during high-tension
+    (ρT) periods to test whether structural coupling is crisis-driven.
+
+    Parameters
+    ----------
+    series_a, series_b : array
+        Binary event series.
+    condition : array
+        Conditioning variable (e.g. ``rho_T``).
+    condition_threshold : float
+        Threshold above which periods are included.
+
+    Returns
+    -------
+    float
+        Conditional synchronization rate.
+    """
+    mask = condition > condition_threshold
+    n = int(np.sum(mask))
+    if n == 0:
+        return 0.0
+    return float(np.mean(series_a[mask] * series_b[mask]))
+
+
 # ===================================================================
 #  SECTION 10: STRUCTURAL CRISIS DETECTION
 # ===================================================================
@@ -1457,6 +1682,71 @@ class Lambda3Visualizer:
         fig.tight_layout()
         return fig
 
+    def plot_multiscale_drift(self, features_dict, series_names, figsize=(16, 10)):
+        """Visualise multiscale ρT and structural drift detection.
+
+        Upper panel: ρT at each window scale (heatmap-style stacked).
+        Lower panel: drift score overlay with ΔΛC pulsations.
+        """
+        n_series = len(series_names)
+        fig, axes = plt.subplots(n_series, 2, figsize=figsize,
+                                 gridspec_kw={"width_ratios": [3, 1]})
+        if n_series == 1:
+            axes = axes.reshape(1, -1)
+
+        for si, nm in enumerate(series_names):
+            f = features_dict[nm]
+            ax_main = axes[si, 0]
+            ax_bar = axes[si, 1]
+
+            ms_rho = f.get("multiscale_rho_T", {})
+            drift = f.get("drift_score", np.zeros(len(f["data"])))
+
+            if ms_rho:
+                # Stacked ρT lines at different scales
+                windows = sorted(ms_rho.keys())
+                cmap = plt.cm.viridis(np.linspace(0.2, 0.9, len(windows)))
+                for wi, w in enumerate(windows):
+                    ax_main.plot(ms_rho[w], color=cmap[wi], alpha=0.7,
+                                 lw=1.2, label=f"ρT(w={w})")
+
+            # Drift score overlay
+            if np.any(drift > 0):
+                ax_drift = ax_main.twinx()
+                ax_drift.fill_between(range(len(drift)), 0, drift,
+                                      color="#e74c3c", alpha=0.25, label="Drift")
+                ax_drift.set_ylabel("Drift score", color="#e74c3c", fontsize=9)
+                ax_drift.tick_params(axis="y", labelcolor="#e74c3c")
+
+            # Pulsation markers
+            pos_idx = np.where(f["delta_LambdaC_pos"] > 0)[0]
+            if len(pos_idx):
+                ax_main.scatter(pos_idx, np.zeros(len(pos_idx)),
+                                marker="^", c="red", s=20, alpha=0.6, zorder=5)
+
+            ax_main.set_title(f"{nm} — multiscale ρT + drift", fontsize=11)
+            ax_main.set_ylabel("ρT")
+            ax_main.legend(loc="upper left", fontsize=8)
+            ax_main.grid(alpha=0.3)
+
+            # Scale-break bar chart
+            breaks = f.get("scale_breaks", [])
+            if breaks:
+                bw = [b[0] for b in breaks]
+                bc = [len(b[1]) for b in breaks]
+                ax_bar.barh([str(w) for w in bw], bc,
+                            color=self.C["tension"], alpha=0.7)
+                ax_bar.set_xlabel("Break count")
+                ax_bar.set_title("Scale breaks", fontsize=10)
+            else:
+                ax_bar.text(0.5, 0.5, "No breaks", transform=ax_bar.transAxes,
+                            ha="center", va="center", fontsize=10)
+
+        fig.suptitle("Multiscale Structural Drift Analysis",
+                     fontsize=14, fontweight="bold")
+        fig.tight_layout()
+        return fig
+
 
 # ===================================================================
 #  SECTION 14: FULL ANALYSIS PIPELINE
@@ -1534,9 +1824,14 @@ def run_lambda3_analysis(
         f = calc_lambda3_features(d, config)
         features_dict[nm] = f
         if verbose:
+            drift_str = ""
+            if config.multiscale and "drift_score" in f:
+                n_drift = int(np.sum(f["drift_events"]))
+                n_breaks = len(f.get("scale_breaks", []))
+                drift_str = f", drift_events={n_drift}, scale_breaks={n_breaks}"
             print(f"  {nm}: ΔΛC⁺={np.sum(f['delta_LambdaC_pos']):.0f}, "
                   f"ΔΛC⁻={np.sum(f['delta_LambdaC_neg']):.0f}, "
-                  f"ρT={np.mean(f['rho_T']):.3f}")
+                  f"ρT={np.mean(f['rho_T']):.3f}{drift_str}")
     results["features_dict"] = features_dict
 
     # --- Stage 2: Hierarchical analysis ---
@@ -1595,6 +1890,33 @@ def run_lambda3_analysis(
     s_mat, s_names = sync_matrix(ev_series)
     results["sync_matrix"] = s_mat
     results["sync_names"] = s_names
+
+    # Dynamic sync (time-varying σ_s) for first pair
+    if len(names) >= 2:
+        tp, sr, ol = calculate_dynamic_sync(
+            ev_series[names[0]], ev_series[names[1]], window=20)
+        results["dynamic_sync"] = {
+            "series_pair": (names[0], names[1]),
+            "time_points": tp,
+            "sync_rates": sr,
+            "optimal_lags": ol,
+        }
+        # Conditional sync (high-tension periods only)
+        rho_a = features_dict[names[0]]["rho_T"]
+        median_rho = float(np.median(rho_a))
+        cond_s = conditional_sync(
+            ev_series[names[0]], ev_series[names[1]],
+            rho_a, median_rho)
+        results["conditional_sync"] = {
+            "value": cond_s,
+            "condition": "rho_T > median",
+            "threshold": median_rho,
+        }
+        if verbose:
+            print(f"  Dynamic sync ({names[0]}⇄{names[1]}): "
+                  f"mean σ_s={np.mean(sr):.3f}, "
+                  f"max={max(sr):.3f}, min={min(sr):.3f}")
+            print(f"  Conditional sync (high ρT): {cond_s:.3f}")
 
     # --- Summary ---
     if verbose:
