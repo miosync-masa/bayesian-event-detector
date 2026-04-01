@@ -278,60 +278,78 @@ class Lambda3DetectorBidirectional:
             'time_trend': feats_target[3]
         }
         
-        # ベイズ推論
-        trace = fit_l3_bayesian_regression_asymmetric(
-            data=data[:, target_idx],
-            features_dict=features_target,
-            config=self.config,
-            interaction_pos=features_source['delta_LambdaC_pos'],
-            interaction_neg=features_source['delta_LambdaC_neg'],
-            interaction_rhoT=features_source['rho_T']
-        )
-        
-        # ★★★ HDI判定つき係数抽出 ★★★
-        hdi_prob = getattr(self.config, 'hdi_prob', 0.94)
-        summary = az.summary(trace, hdi_prob=hdi_prob)
-        
-        # HDI列名を自動検出（94%なら hdi_3%, hdi_97%）
-        hdi_cols = [c for c in summary.columns if c.startswith('hdi_')]
-        hdi_cols = sorted(hdi_cols, key=lambda c: float(c.replace('hdi_', '').replace('%', '')))
-        hdi_lo_col = hdi_cols[0]   # 例: 'hdi_3%'
-        hdi_hi_col = hdi_cols[-1]  # 例: 'hdi_97%'
-        
-        beta_pos = summary.loc['beta_interact_pos', 'mean']
-        beta_neg = summary.loc['beta_interact_neg', 'mean']
-        beta_stress = summary.loc['beta_interact_stress', 'mean']
-        beta_total = abs(beta_pos) + abs(beta_neg) + abs(beta_stress)
-        
-        # HDIがゼロを跨ぐかチェック
-        supported_vars = []
-        for var in ['beta_interact_pos', 'beta_interact_neg', 'beta_interact_stress']:
-            lo = float(summary.loc[var, hdi_lo_col])
-            hi = float(summary.loc[var, hdi_hi_col])
-            if lo > 0 or hi < 0:  # ゼロを跨がない = 構造的に有意
-                supported_vars.append(var)
-        
-        edge_supported = len(supported_vars) > 0
-        
-        # 同期率とラグ
+        # ★★★ STEP 1: まずsync profileでlagを発見 ★★★
         sync_profile, max_sync, optimal_lag = calculate_sync_profile(
             features_source['delta_LambdaC_pos'].astype(np.float64),
             features_target['delta_LambdaC_pos'].astype(np.float64),
             lag_window=10
         )
         
+        # ★★★ STEP 2: 発見したlagでsource特徴量をシフト ★★★
+        if optimal_lag != 0:
+            shifted_pos = np.roll(features_source['delta_LambdaC_pos'], optimal_lag)
+            shifted_neg = np.roll(features_source['delta_LambdaC_neg'], optimal_lag)
+            shifted_rho = np.roll(features_source['rho_T'], optimal_lag)
+            
+            # rollの端を0埋め（循環させない）
+            if optimal_lag > 0:
+                shifted_pos[:optimal_lag] = 0
+                shifted_neg[:optimal_lag] = 0
+                shifted_rho[:optimal_lag] = 0
+            else:
+                shifted_pos[optimal_lag:] = 0
+                shifted_neg[optimal_lag:] = 0
+                shifted_rho[optimal_lag:] = 0
+        else:
+            shifted_pos = features_source['delta_LambdaC_pos']
+            shifted_neg = features_source['delta_LambdaC_neg']
+            shifted_rho = features_source['rho_T']
+        
+        # ★★★ STEP 3: シフト済み特徴量でベイズ回帰 ★★★
+        trace = fit_l3_bayesian_regression_asymmetric(
+            data=data[:, target_idx],
+            features_dict=features_target,
+            config=self.config,
+            interaction_pos=shifted_pos,
+            interaction_neg=shifted_neg,
+            interaction_rhoT=shifted_rho
+        )
+        
+        # ★★★ STEP 4: HDI判定つき係数抽出 ★★★
+        hdi_prob = getattr(self.config, 'hdi_prob', 0.94)
+        summary = az.summary(trace, hdi_prob=hdi_prob)
+        
+        hdi_cols = [c for c in summary.columns if c.startswith('hdi_')]
+        hdi_cols = sorted(hdi_cols, key=lambda c: float(c.replace('hdi_', '').replace('%', '')))
+        hdi_lo_col = hdi_cols[0]
+        hdi_hi_col = hdi_cols[-1]
+        
+        beta_pos = summary.loc['beta_interact_pos', 'mean']
+        beta_neg = summary.loc['beta_interact_neg', 'mean']
+        beta_stress = summary.loc['beta_interact_stress', 'mean']
+        beta_total = abs(beta_pos) + abs(beta_neg) + abs(beta_stress)
+        
+        supported_vars = []
+        for var in ['beta_interact_pos', 'beta_interact_neg', 'beta_interact_stress']:
+            lo = float(summary.loc[var, hdi_lo_col])
+            hi = float(summary.loc[var, hdi_hi_col])
+            if lo > 0 or hi < 0:
+                supported_vars.append(var)
+        
+        edge_supported = len(supported_vars) > 0
+        
         return {
             'beta': beta_total,
             'beta_pos': beta_pos,
             'beta_neg': beta_neg,
             'beta_stress': beta_stress,
-            'edge_supported': edge_supported,      # ★ HDI判定
-            'supported_vars': supported_vars,       # ★ どの係数が有意か
+            'edge_supported': edge_supported,
+            'supported_vars': supported_vars,
             'lag': optimal_lag,
             'sync_rate': max_sync,
             'trace': trace
         }
-    
+        
     def detect(self, data: np.ndarray) -> dict:
         """
         両方向の因果関係を検出
