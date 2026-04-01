@@ -1473,6 +1473,71 @@ def conditional_sync(
     return float(np.mean(series_a[mask] * series_b[mask]))
 
 
+def structural_resonance(
+    rho_a: np.ndarray,
+    rho_b: np.ndarray,
+    lag_window: int = LAG_WINDOW_DEFAULT,
+) -> Tuple[float, int, np.ndarray]:
+    """Continuous-valued structural resonance via lagged correlation of ρT.
+
+    Unlike ``calculate_sync_profile`` which operates on sparse binary
+    ΔΛC events, this function measures the continuous co-variation of
+    tension scalars (ρT).  With 350+ data points this has far more
+    statistical power than binary event matching.
+
+    This is the Λ³ equivalent of Bankai's ``compute_lagged_correlation``
+    applied to structural tension rather than raw anomaly scores.
+
+    Parameters
+    ----------
+    rho_a, rho_b : array
+        Continuous tension scalar (ρT) series.
+    lag_window : int
+        Maximum lag to scan (both directions).
+
+    Returns
+    -------
+    max_resonance : float
+        Maximum absolute correlation across all lags [0, 1].
+    optimal_lag : int
+        Lag achieving max resonance (positive = b lags a).
+    profile : (2*lag_window+1,) array
+        Correlation at each lag.
+    """
+    n = len(rho_a)
+    lags = np.arange(-lag_window, lag_window + 1)
+    profile = np.zeros(len(lags))
+
+    for idx, lag in enumerate(lags):
+        if lag < 0:
+            a_slice = rho_a[-lag:]
+            b_slice = rho_b[:lag]
+        elif lag > 0:
+            a_slice = rho_a[:-lag]
+            b_slice = rho_b[lag:]
+        else:
+            a_slice = rho_a
+            b_slice = rho_b
+
+        if len(a_slice) < 3:
+            profile[idx] = 0.0
+            continue
+
+        std_a = np.std(a_slice)
+        std_b = np.std(b_slice)
+        if std_a < 1e-10 or std_b < 1e-10:
+            profile[idx] = 0.0
+        else:
+            profile[idx] = float(np.corrcoef(a_slice, b_slice)[0, 1])
+
+    abs_profile = np.abs(profile)
+    best_idx = int(np.argmax(abs_profile))
+    max_resonance = float(abs_profile[best_idx])
+    optimal_lag = int(lags[best_idx])
+
+    return max_resonance, optimal_lag, profile
+
+
 # ===================================================================
 #  SECTION 10: STRUCTURAL CRISIS DETECTION
 # ===================================================================
